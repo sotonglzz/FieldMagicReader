@@ -1,48 +1,51 @@
 <!DOCTYPE html>
 <html lang="en">
+    <a href="/admin" class="admin-button">Admin Portal</a>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Job Listings</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
 </head>
 <body>
     <header>
         <h1>Job Listings</h1>
-        <a href="/refresh" class="refresh-button">Refresh Data</a>
+        <button id="refresh-button" onclick="startBackgroundSync()">Refresh Data</button>
+        <div id="sync-status">
+            <span id="spinner" class="spinner"></span>
+            <span id="sync-text">Background Sync Ongoing</span>
+        </div>
+        
+
         <div class="pagination">
             {% if current_page > 1 %}
                 <a href="/?page={{ current_page - 1 }}{% if search_query %}&search={{ search_query }}{% endif %}">Previous</a>
             {% endif %}
-        
-            <!-- Always display the first page -->
+
             <a href="/?page=1{% if search_query %}&search={{ search_query }}{% endif %}" 
                class="{% if current_page == 1 %}active{% endif %}">1</a>
-        
-            <!-- If there are more pages before the current page -->
+
             {% if current_page > 4 %}
                 <span>...</span>
             {% endif %}
-        
-            <!-- Show a few pages around the current page -->
+
             {% for i in range(current_page - 2, current_page + 3) %}
                 {% if i > 1 and i < total_pages %}
                     <a href="/?page={{ i }}{% if search_query %}&search={{ search_query }}{% endif %}" 
                        class="{% if i == current_page %}active{% endif %}">{{ i }}</a>
                 {% endif %}
             {% endfor %}
-        
-            <!-- If there are more pages after the current page -->
+
             {% if current_page < total_pages - 3 %}
                 <span>...</span>
             {% endif %}
-        
-            <!-- Always display the last page -->
+
             {% if total_pages > 1 %}
                 <a href="/?page={{ total_pages }}{% if search_query %}&search={{ search_query }}{% endif %}" 
                    class="{% if current_page == total_pages %}active{% endif %}">{{ total_pages }}</a>
             {% endif %}
-        
+
             {% if current_page < total_pages %}
                 <a href="/?page={{ current_page + 1 }}{% if search_query %}&search={{ search_query }}{% endif %}">Next</a>
             {% endif %}
@@ -57,25 +60,33 @@
             <thead>
                 <tr>
                     <th>Job Number</th>
+                    <th>Job Type</th>
+                    <th>Date</th>
+                    <th>Arrival Time</th>
+                    <th>Removal Time</th>
                     <th>Job Summary</th>
                     <th>Job Location</th>
                     <th>Last Modified</th>
                 </tr>
-            </thead>
+            </thead>            
             <tbody>
                 {% for job in jobs %}
-                    <tr class="{% if job[3] and job[3] < current_time - timedelta(hours=1) %}outdated{% endif %}">
+                    <tr class="{% if job[7] and job[7] < current_time - timedelta(hours=1) %}outdated{% endif %}">
                         <td>{{ job[0] }}</td>
                         <td>{{ job[1] }}</td>
                         <td>{{ job[2] }}</td>
                         <td>{{ job[3] }}</td>
+                        <td>{{ job[4] }}</td>
+                        <td>{{ job[5] }}</td>
+                        <td>{{ job[6] }}</td>
+                        <td>{{ job[7] }}</td>
                     </tr>
                 {% else %}
                     <tr>
-                        <td colspan="4">No jobs available</td>
+                        <td colspan="8">No jobs available</td>
                     </tr>
                 {% endfor %}
-            </tbody>
+            </tbody>            
         </table>
     </main>
     <footer>

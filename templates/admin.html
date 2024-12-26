@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Portal</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <header>
+        <h1>Admin Portal</h1>
+        <a href="/" class="back-button">Back to Job Listings</a>
+    </header>
+    <main>
+        <h2>Parsing Errors</h2>
+        {% if parse_errors %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Job Number</th>
+                        <th>Job Summary</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for error in parse_errors %}
+                        <tr>
+                            <td>{{ error.job_number }}</td>
+                            <td>{{ error.job_summary }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p>No errors found.</p>
+        {% endif %}
+    </main>
+    <footer>
+        <p>Powered by Flask and SQLite</p>
+    </footer>
+</body>
+</html>

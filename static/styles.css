@@ -1,23 +1,46 @@
+/* Table Container for Responsive Design */
+main {
+    overflow-x: auto; /* Enable horizontal scrolling for small screens */
+}
+
 /* Table Styles */
 table {
-    width: 100%;
+    width: 100%; /* Allow table to take full width */
     border-collapse: collapse;
     margin: 20px 0;
     font-size: 16px;
     font-family: Arial, sans-serif;
     text-align: left;
+    table-layout: auto; /* Adjust column widths based on content */
 }
 
+/* Header Styling */
 thead {
     background-color: #007bff; /* Header background color */
     color: white; /* Header text color */
 }
 
-th, td {
-    border: 1px solid #ddd; /* Add borders to cells */
-    padding: 12px; /* Add padding for spacing */
+table th, table td {
+    text-align: left;
+    padding: 12px;
+    white-space: nowrap; /* Prevent text wrapping */
 }
 
+table th:nth-child(2), table td:nth-child(2), /* Job Type */
+table th:nth-child(3), table td:nth-child(3), /* Date */
+table th:nth-child(4), table td:nth-child(4), /* Arrival Time */
+table th:nth-child(5), table td:nth-child(5) { /* Removal Time */
+    width: 150px; /* Adjust as needed */
+}
+
+/* Adjust the Job Summary Column for Wrapping */
+table th:nth-child(6), /* Job Summary */
+table td:nth-child(6) {
+    word-wrap: break-word; /* Break words if they are too long */
+    white-space: normal;   /* Allow text to wrap onto the next line */
+}
+
+/* Row Styling */
 tbody tr:nth-child(odd) {
     background-color: #f9f9f9; /* Light gray for odd rows */
 }
@@ -71,37 +94,38 @@ footer {
 .outdated {
     background-color: #ffcccc;
 }
-/* Pagination Styles */
+
+
+/* Pagination Styling */
 .pagination {
     display: flex;
     justify-content: center;
     flex-wrap: wrap;
-    gap: 5px; /* Add spacing between page buttons */
+    gap: 5px;
     margin-top: 20px;
-    margin-bottom: 10px; /* Add some spacing below pagination */
+    margin-bottom: 10px;
 }
 
 .pagination a {
-    padding: 8px 12px; /* Adjust padding for button size */
+    padding: 8px 12px;
     text-decoration: none;
-    color: #000000; /* Ensure visible text color (black) */
-    background-color: #ffffff; /* White background for contrast */
-    border: 1px solid #ddd; /* Light gray border for visibility */
-    border-radius: 4px; /* Rounded edges */
-    font-size: 14px; /* Readable font size */
-    transition: background-color 0.2s ease, color 0.2s ease;
+    color: #000;
+    background-color: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+    transition: background-color 0.2s, color 0.2s;
 }
 
 .pagination a.active {
-    background-color: #28a745; /* Green background for the active page */
-    color: white; /* White text on the active button */
-    border-color: #28a745; /* Match border to the green background */
+    background-color: #28a745; /* Active page green */
+    color: #fff;
+    border-color: #28a745;
 }
 
 .pagination a:hover {
-    background-color: #f1f1f1; /* Light gray on hover */
-    color: #0056b3; /* Slightly darker blue text */
-    border-color: #ccc; /* Change border on hover */
+    background-color: #f1f1f1;
+    color: #0056b3;
 }
 
 /* Search Bar Positioning */
@@ -132,4 +156,42 @@ form button {
 
 form button:hover {
     background-color: #0056b3;
+}
+
+/* Responsive Styling for Smaller Screens */
+@media screen and (max-width: 768px) {
+    table {
+        font-size: 14px; /* Smaller text for better fit */
+    }
+    form input {
+        width: 100%; /* Make search input full width */
+    }
+}
+
+/*Spinner */
+.spinner {
+    border: 4px solid #f3f3f3; /* Light gray */
+    border-top: 4px solid #3498db; /* Blue */
+    border-radius: 50%;
+    width: 16px;
+    height: 16px;
+    animation: spin 1s linear infinite;
+    display: inline-block;
+    margin-right: 8px;
+}
+
+@keyframes spin {
+    0% {
+        transform: rotate(0deg);
+    }
+    100% {
+        transform: rotate(360deg);
+    }
+}
+
+#sync-status {
+    margin-left: 10px;
+    display: inline-flex;
+    align-items: center;
+    font-size: 14px;
 }

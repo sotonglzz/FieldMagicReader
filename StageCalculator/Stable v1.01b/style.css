@@ -1,0 +1,59 @@
+body {
+    text-align: center;
+}
+
+#input-container {
+    margin-bottom: 20px;
+}
+
+#rectangle-container {
+    position: relative;
+    display: inline-block;
+}
+
+#rectangle-title {
+    font-weight: bold;
+    margin-bottom: 10px;
+}
+
+#rectangle {
+    background-color: lightblue;
+    border: 1px solid black;
+    position: relative;
+    margin: 0 auto;
+    display: inline-block;
+}
+
+.dimension-label {
+    position: absolute;
+    background-color: white;
+    padding: 2px 5px;
+    border: 1px solid black;
+    font-size: 12px;
+}
+
+.width-label {
+    bottom: -25px; /* Move the width label below the rectangle */
+    left: 50%;
+    transform: translateX(-50%);
+}
+
+.height-label {
+    top: 50%;
+    right: -50px; /* Move the length label to the right side of the rectangle */
+    transform: translateY(-50%);
+}
+
+.large-panel, .rotated-large-panel {
+    position: absolute;
+    border: 2px solid white;
+}
+
+.large-panel {
+    background-color: black;
+}
+
+.rotated-large-panel {
+    background-color: black;
+    /*transform: rotate(180deg);  Rotate the panel by 90 degrees */
+}

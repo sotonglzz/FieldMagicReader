@@ -51,6 +51,7 @@ def init_db():
             due_date TEXT,
             status TEXT,
             date_completed TIMESTAMP
+            id TEXT
         )
         """)
         conn.commit()
@@ -86,8 +87,6 @@ def fetch_jobs(last_modified=None):
             break
 
         response_data = response.json()
-        end_time = time.time() # End timing
-        logging.info(f"API call completed in {end_time - start_time:.2f} seconds")
         jobs = response_data.get("data", [])
 
         # Filter out jobs that have a completed_date
@@ -98,12 +97,10 @@ def fetch_jobs(last_modified=None):
         next_token = response_data.get("next_token")
         if not next_token:
             break
-    endtime=time.time()
+    end_time=time.time()
     logging.info(f"API call completed in {end_time - start_time:.2f} seconds")
     return all_jobs
 
-
-# Sync with API
 # Sync with API
 def sync_with_api(overall=False):
     global sync_status
@@ -123,9 +120,10 @@ def sync_with_api(overall=False):
                 cursor.execute("""
                     INSERT OR REPLACE INTO jobs (
                         job_number, job_summary, job_location, last_modified,
-                        job_type, job_date, arrival_time, removal_time, priority, due_date, status, date_completed
+                        job_type, job_date, arrival_time, removal_time, priority,
+                        due_date, status, date_completed, id
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     job["job_number"],
                     job.get("job_summary", "No Summary"),
@@ -138,8 +136,11 @@ def sync_with_api(overall=False):
                     job.get("priority", "Unknown"),
                     job.get("due_date", "Unknown"),
                     job.get("status", "Unknown"),
-                    job.get("date_completed", None)
+                    job.get("date_completed", None),
+                    job.get("id", None)  # Use "id" from the API response
                 ))
+                logging.info(f"Job fetched: {job}")
+
 
             conn.commit()
             update_job_types()
@@ -181,7 +182,7 @@ def get_cached_jobs(page=1, per_page=20, search_query=None):
         
         if search_query:
             cursor.execute("""
-                SELECT job_number, job_type, job_date, arrival_time, removal_time, job_summary, job_location, last_modified
+                SELECT job_number, job_type, job_date, arrival_time, removal_time, job_summary, job_location, last_modified, id
                 FROM jobs
                 WHERE (job_summary LIKE ? OR job_location LIKE ?) AND date_completed IS NULL
                 ORDER BY last_modified DESC
@@ -189,7 +190,7 @@ def get_cached_jobs(page=1, per_page=20, search_query=None):
             """, (f"%{search_query}%", f"%{search_query}%", per_page, offset))
         else:
             cursor.execute("""
-                SELECT job_number, job_type, job_date, arrival_time, removal_time, job_summary, job_location, last_modified
+                SELECT job_number, job_type, job_date, arrival_time, removal_time, job_summary, job_location, last_modified, id
                 FROM jobs
                 WHERE date_completed IS NULL
                 ORDER BY last_modified DESC
@@ -213,6 +214,9 @@ def home():
     page = int(request.args.get('page', 1))
     search_query = request.args.get('search', None)
     jobs, total_jobs = get_cached_jobs(page=page, per_page=20, search_query=search_query)
+    
+    logging.info(f"Jobs fetched for page {page}: {jobs}")
+    
     total_pages = (total_jobs + 19) // 20 # Calculate total pages
     return render_template(
         "index.html",

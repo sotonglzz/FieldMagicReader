@@ -69,24 +69,34 @@
                     <th>Last Modified</th>
                 </tr>
             </thead>            
+            {% if jobs %}
             <tbody>
                 {% for job in jobs %}
-                    <tr class="{% if job[7] and job[7] < current_time - timedelta(hours=1) %}outdated{% endif %}">
-                        <td>{{ job[0] }}</td>
-                        <td>{{ job[1] }}</td>
-                        <td>{{ job[2] }}</td>
-                        <td>{{ job[3] }}</td>
-                        <td>{{ job[4] }}</td>
-                        <td>{{ job[5] }}</td>
-                        <td>{{ job[6] }}</td>
-                        <td>{{ job[7] }}</td>
-                    </tr>
-                {% else %}
-                    <tr>
-                        <td colspan="8">No jobs available</td>
-                    </tr>
+                <tr>
+                    <td>
+                        {% if job[2] %} <!-- Assuming column 2 is the ID -->
+                        <a href="https://app.fieldmagic.co/#/jobs/{{ job[8] }}" target="_blank">
+                            {{ job[0] }} <!-- Job Number -->
+                        </a>
+                        {% else %}
+                        {{ job[0] }} <!-- Job Number -->
+                        {% endif %}
+                    </td>
+                    <td>{{ job[1] }}</td> <!-- Job Type -->
+                    <td>{{ job[2] }}</td> <!-- Date -->
+                    <td>{{ job[3] }}</td> <!-- Arrival Time -->
+                    <td>{{ job[4] }}</td> <!-- Removal Time -->
+                    <td>{{ job[5] }}</td> <!-- Job Summary -->
+                    <td>{{ job[6] }}</td> <!-- Job Location -->
+                    <td>{{ job[7] }}</td> <!-- Last Modified -->
+                </tr>
                 {% endfor %}
-            </tbody>            
+            </tbody>
+            {% else %}
+                <tr>
+                    <td colspan="8">No jobs found.</td>
+                </tr>
+            {% endif %}
         </table>
     </main>
     <footer>

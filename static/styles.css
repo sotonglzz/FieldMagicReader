@@ -3,6 +3,75 @@ main {
     overflow-x: auto; /* Enable horizontal scrolling for small screens */
 }
 
+.report-page-layout {
+    align-items: flex-start;
+    display: grid;
+    gap: 20px;
+    grid-template-columns: 1fr;
+}
+
+.report-main-column {
+    grid-area: 1 / 1;
+    min-width: 0;
+}
+
+.report-modifiers {
+    background-color: #f8fbff;
+    border: 1px solid #cfe3ff;
+    border-radius: 6px;
+    box-sizing: border-box;
+    font-family: Arial, sans-serif;
+    grid-area: 1 / 1;
+    justify-self: end;
+    margin: 20px 0;
+    padding: 16px;
+    position: sticky;
+    top: 16px;
+    width: 280px;
+    z-index: 2;
+}
+
+.report-modifiers h2 {
+    font-size: 18px;
+    margin: 0 0 12px;
+}
+
+.report-modifier-form {
+    display: block;
+    margin: 0;
+}
+
+.report-modifier-form fieldset {
+    border: 1px solid #d7e7fb;
+    border-radius: 4px;
+    margin: 0;
+    padding: 12px;
+}
+
+.report-modifier-form fieldset + fieldset {
+    margin-top: 12px;
+}
+
+.report-modifier-form legend {
+    font-weight: bold;
+    padding: 0 4px;
+}
+
+.report-modifier-form label {
+    align-items: center;
+    display: flex;
+    font-size: 14px;
+    gap: 6px;
+    font-weight: normal;
+    margin-top: 8px;
+}
+
+.report-modifier-form input[type="checkbox"],
+.report-modifier-form input[type="radio"] {
+    margin: 0;
+    width: auto;
+}
+
 /* Table Styles */
 table {
     width: 100%; /* Allow table to take full width */
@@ -24,6 +93,49 @@ table th, table td {
     text-align: left;
     padding: 12px;
     white-space: nowrap; /* Prevent text wrapping */
+}
+
+.sortable-header-button {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    color: inherit;
+    cursor: pointer;
+    display: inline-flex;
+    font: inherit;
+    font-weight: bold;
+    gap: 6px;
+    padding: 0;
+    text-align: left;
+}
+
+.sortable-header-button:hover,
+.sortable-header-button:focus {
+    text-decoration: underline;
+}
+
+.sort-indicator {
+    font-size: 12px;
+    min-width: 12px;
+}
+
+.explain-tooltip {
+    background-color: #eef6ff;
+    border: 1px solid #cfe3ff;
+    border-radius: 999px;
+    color: #0056b3;
+    cursor: help;
+    display: inline-block;
+    font-size: 11px;
+    font-weight: bold;
+    height: 16px;
+    line-height: 1;
+    margin-left: 6px;
+    padding: 3px;
+    text-align: center;
+    text-transform: uppercase;
+    vertical-align: middle;
+    width: 16px;
 }
 
 table th:nth-child(2), table td:nth-child(2), /* Job Type */
@@ -66,6 +178,426 @@ header {
     text-align: center;
     font-size: 24px;
     font-weight: bold;
+}
+
+.nav-links {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.nav-button {
+    background-color: #ffffff;
+    border-radius: 4px;
+    color: #007bff;
+    display: inline-block;
+    font-size: 14px;
+    padding: 8px 12px;
+    text-decoration: none;
+}
+
+.nav-button:hover {
+    background-color: #f1f1f1;
+}
+
+.report-year-selector {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-top: 12px;
+}
+
+.report-year-button {
+    background-color: #ffffff;
+    border: 2px solid #ffffff;
+    border-radius: 4px;
+    color: #007bff;
+    display: inline-block;
+    font-size: 16px;
+    padding: 8px 16px;
+    text-decoration: none;
+}
+
+.report-year-button.active {
+    background-color: #28a745;
+    border-color: #28a745;
+    color: #ffffff;
+}
+
+.report-year-button:hover {
+    background-color: #f1f1f1;
+    color: #0056b3;
+}
+
+.report-year-button.active:hover {
+    background-color: #218838;
+    color: #ffffff;
+}
+
+.report-summary {
+    font-family: Arial, sans-serif;
+    margin: 20px 0;
+}
+
+.report-loading-panel {
+    background-color: #f8fbff;
+    border: 1px solid #cfe3ff;
+    border-radius: 6px;
+    font-family: Arial, sans-serif;
+    margin: 20px 0;
+    padding: 16px;
+}
+
+.report-progress-bar {
+    background-color: #dbeafe;
+    border-radius: 999px;
+    height: 16px;
+    overflow: hidden;
+}
+
+.report-progress-fill {
+    background-color: #28a745;
+    height: 100%;
+    transition: width 0.3s ease;
+}
+
+#report-progress-percent {
+    font-weight: bold;
+    margin-bottom: 4px;
+}
+
+#report-progress-message {
+    margin-top: 0;
+}
+
+.report-content {
+    margin-top: 20px;
+}
+
+.report-view-controls {
+    display: flex;
+    justify-content: flex-start;
+    margin: 20px 0 0;
+}
+
+.report-view-button {
+    background-color: #28a745;
+    border: none;
+    border-radius: 4px;
+    color: #ffffff;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 8px 12px;
+}
+
+.report-view-button:hover {
+    background-color: #218838;
+}
+
+.report-view-button:disabled {
+    background-color: #8abf96;
+    cursor: not-allowed;
+}
+
+.invoice-chooser-overlay {
+    align-items: center;
+    background-color: rgba(0, 0, 0, 0.45);
+    bottom: 0;
+    display: flex;
+    justify-content: center;
+    left: 0;
+    padding: 24px;
+    position: fixed;
+    right: 0;
+    top: 0;
+    z-index: 1000;
+}
+
+.invoice-chooser-dialog {
+    background-color: #ffffff;
+    border-radius: 8px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+    font-family: Arial, sans-serif;
+    max-height: 80vh;
+    max-width: 900px;
+    overflow: auto;
+    padding: 20px;
+    position: relative;
+    width: min(900px, 100%);
+}
+
+.invoice-chooser-dialog h3 {
+    margin: 0 0 14px;
+}
+
+.invoice-chooser-close {
+    background-color: #f1f1f1;
+    border: 1px solid #d0d0d0;
+    border-radius: 4px;
+    cursor: pointer;
+    padding: 6px 10px;
+    position: absolute;
+    right: 16px;
+    top: 16px;
+}
+
+.invoice-chooser-table {
+    font-size: 14px;
+    margin: 0;
+}
+
+.product-view-toolbar {
+    font-family: Arial, sans-serif;
+    margin: 16px 0 0;
+}
+
+.product-view-toolbar label {
+    display: block;
+    font-size: 14px;
+    font-weight: bold;
+    margin-bottom: 6px;
+}
+
+.product-smart-filter {
+    border: 1px solid #cfe3ff;
+    border-radius: 4px;
+    box-sizing: border-box;
+    font-size: 14px;
+    max-width: 420px;
+    padding: 8px 10px;
+    width: 100%;
+}
+
+.product-smart-filter-hint {
+    color: #555;
+    font-size: 13px;
+    margin: 8px 0 0;
+}
+
+.product-pricing-metrics-form {
+    align-items: end;
+    display: grid;
+    gap: 8px 12px;
+    grid-template-columns: repeat(4, minmax(140px, 180px)) auto;
+    margin-top: 14px;
+    max-width: 1120px;
+}
+
+.product-pricing-metrics-form label {
+    margin-bottom: 0;
+}
+
+.product-mid-tier-toggle {
+    align-items: center;
+    background-color: #ffffff;
+    border: 1px solid #cfe3ff;
+    border-radius: 4px;
+    box-sizing: border-box;
+    display: flex;
+    gap: 8px;
+    min-height: 36px;
+    padding: 8px 10px;
+}
+
+.product-mid-tier-toggle input {
+    margin: 0;
+}
+
+.product-price-input {
+    border: 1px solid #cfe3ff;
+    border-radius: 4px;
+    box-sizing: border-box;
+    font-size: 14px;
+    padding: 8px 10px;
+    width: 100%;
+}
+
+.product-pricing-metrics {
+    background-color: #f8fbff;
+    border: 1px solid #cfe3ff;
+    border-radius: 6px;
+    font-family: Arial, sans-serif;
+    margin-top: 16px;
+    padding: 16px;
+}
+
+.product-pricing-metrics h3 {
+    margin: 0 0 8px;
+}
+
+.product-pricing-metrics-message {
+    margin: 0;
+}
+
+.product-pricing-metric-grid {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    margin: 14px 0;
+}
+
+.product-pricing-metric-card {
+    background-color: #ffffff;
+    border: 1px solid #d7e7fb;
+    border-radius: 6px;
+    padding: 12px;
+}
+
+.product-pricing-metric-card strong {
+    color: #555;
+    display: block;
+    font-size: 12px;
+    margin-bottom: 6px;
+}
+
+.product-pricing-metric-card span {
+    font-size: 18px;
+    font-weight: bold;
+}
+
+.product-pricing-metrics-table {
+    background-color: #ffffff;
+    font-size: 14px;
+    margin: 14px 0;
+}
+
+.product-pricing-scenarios {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+}
+
+.product-pricing-scenarios span {
+    background-color: #e8f4ea;
+    border-radius: 999px;
+    color: #1e7e34;
+    font-weight: bold;
+    padding: 6px 10px;
+}
+
+.product-filter-summary-row {
+    background-color: #e8f4ea !important;
+    border-top: 2px solid #28a745;
+    font-weight: bold;
+}
+
+.product-filter-summary-row:hover {
+    background-color: #dff0e2 !important;
+}
+
+.price-risk-badge {
+    border-radius: 4px;
+    display: inline-block;
+    font-size: 12px;
+    font-weight: bold;
+    padding: 4px 8px;
+    white-space: nowrap;
+}
+
+.price-risk-stable {
+    background-color: #e8f4ea;
+    color: #1e7e34;
+}
+
+.price-risk-variable {
+    background-color: #fff3cd;
+    color: #856404;
+}
+
+.price-risk-discount {
+    background-color: #f8d7da;
+    color: #721c24;
+}
+
+.price-risk-premium {
+    background-color: #e2d9f3;
+    color: #4a235a;
+}
+
+.product-view .sortable-report-table th:nth-child(5),
+.product-view .sortable-report-table td:nth-child(5) {
+    white-space: normal;
+}
+
+.report-filter-form {
+    align-items: center;
+    flex-wrap: wrap;
+    font-size: 14px;
+    margin: 15px 0;
+}
+
+.report-filter-form label {
+    font-weight: normal;
+}
+
+.error-message {
+    color: #b00020;
+    font-weight: bold;
+}
+
+.invoice-line-items-row > td {
+    background-color: #eef6ff;
+    padding: 0 12px 12px;
+}
+
+.invoice-line-items-table {
+    background-color: #ffffff;
+    font-size: 14px;
+    margin: 0;
+}
+
+.invoice-line-items-table thead {
+    background-color: #4f8edc;
+}
+
+.invoice-line-items-table th,
+.invoice-line-items-table td {
+    padding: 8px;
+}
+
+.invoice-line-items-table th:nth-child(3),
+.invoice-line-items-table td:nth-child(3) {
+    white-space: normal;
+}
+
+.invoice-detail-summary {
+    background-color: #f8fbff;
+    border: 1px solid #cfe3ff;
+    border-radius: 6px;
+    font-family: Arial, sans-serif;
+    margin: 20px 0;
+    padding: 16px;
+}
+
+.invoice-detail-summary h2 {
+    margin: 0 0 12px;
+}
+
+.invoice-detail-summary dl {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    margin: 0;
+}
+
+.invoice-detail-summary div {
+    background-color: #ffffff;
+    border: 1px solid #d7e7fb;
+    border-radius: 4px;
+    padding: 10px;
+}
+
+.invoice-detail-summary dt {
+    color: #555555;
+    font-size: 12px;
+    font-weight: bold;
+    margin-bottom: 4px;
+}
+
+.invoice-detail-summary dd {
+    margin: 0;
 }
 
 footer {
@@ -160,6 +692,12 @@ form button:hover {
 
 /* Responsive Styling for Smaller Screens */
 @media screen and (max-width: 768px) {
+    .report-modifiers {
+        grid-area: auto;
+        justify-self: stretch;
+        position: static;
+        width: auto;
+    }
     table {
         font-size: 14px; /* Smaller text for better fit */
     }

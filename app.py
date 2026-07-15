@@ -1,8 +1,10 @@
 import sqlite3
 import requests
 import time
+import json
 from base64 import b64encode
 from datetime import datetime, timedelta
+from decimal import Decimal
 from flask import Flask, render_template, request, redirect, url_for, jsonify
 from update_job_types import update_job_types, update_job_addresses, update_pickup_dates, PARSE_ERRORS
 import logging
@@ -22,9 +24,12 @@ logging.basicConfig(
 sync_status = {"ongoing": False, "last_sync_time": None, "error": None}
 sync_lock = Lock()
 sync_complete = False
+report_jobs = {}
+report_jobs_lock = Lock()
 
 # API Setup
 API_URL = "http://api.fieldmagic.co/jobs"
+CUSTOMER_INVOICES_API_URL = "https://api.fieldmagic.co/customer_invoices"
 username = "c3d1beb4687f6a20"
 password = "310b7da2d2fe630739fa6a12"
 
@@ -33,6 +38,20 @@ app = Flask(__name__)
 
 # Database Initialization
 DB_NAME = "jobs_cache.db"
+REPORT_PERIODS = {
+    "fy25": {
+        "report_key": "fy25-report",
+        "report_title": "FY25 Report",
+        "start_date": datetime(2024, 7, 1).date(),
+        "end_date": datetime(2025, 6, 30).date(),
+    },
+    "fy26": {
+        "report_key": "fy26-report",
+        "report_title": "FY26 Report",
+        "start_date": datetime(2025, 7, 1).date(),
+        "end_date": datetime(2026, 6, 30).date(),
+    },
+}
 
 def init_db():
     with sqlite3.connect(DB_NAME) as conn:
@@ -50,10 +69,29 @@ def init_db():
             priority TEXT,
             due_date TEXT,
             status TEXT,
-            date_completed TIMESTAMP
+            date_completed TIMESTAMP,
             id TEXT
         )
         """)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS invoice_report_cache (
+            report_key TEXT PRIMARY KEY,
+            fetched_at TIMESTAMP,
+            payload TEXT
+        )
+        """)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS invoice_detail_cache (
+            invoice_id TEXT PRIMARY KEY,
+            fetched_at TIMESTAMP,
+            payload TEXT
+        )
+        """)
+        cursor.execute("PRAGMA table_info(jobs)")
+        columns = {column[1] for column in cursor.fetchall()}
+        if "id" not in columns:
+            cursor.execute("ALTER TABLE jobs ADD COLUMN id TEXT")
+            logging.info("Added missing 'id' column to jobs table.")
         conn.commit()
 
 # Encrypting FieldMagic Username & Password (API Key and Secret)
@@ -61,14 +99,17 @@ def basic_auth(username, password):
     token = b64encode(f"{username}:{password}".encode('utf-8')).decode("ascii")
     return f'Basic {token}'
 
-# Fetch Data from API with Pagination
-def fetch_jobs(last_modified=None):
-    start_time = time.time() # Start timing
-    headers = {
+def api_headers():
+    return {
         'Authorization': basic_auth(username, password),
         'Content-Type': 'application/json',
         'Client-Id': 'b48698b2-d589-4b64-af1f-4482e7fbe599',
     }
+
+# Fetch Data from API with Pagination
+def fetch_jobs(last_modified=None):
+    start_time = time.time() # Start timing
+    headers = api_headers()
     params = {}
     if last_modified:
         params["last_modified"] = last_modified
@@ -100,6 +141,179 @@ def fetch_jobs(last_modified=None):
     end_time=time.time()
     logging.info(f"API call completed in {end_time - start_time:.2f} seconds")
     return all_jobs
+
+def parse_api_datetime(value):
+    if not value:
+        return None
+    return datetime.fromisoformat(value)
+
+def format_date_label(value):
+    return f"{value.day} {value.strftime('%B %Y')}"
+
+def fetch_invoices_for_period(start_date, end_date, progress_callback=None):
+    params = {"date_invoice": start_date.isoformat()}
+    invoices = []
+    next_token = None
+    api_call_count = 0
+
+    while True:
+        if next_token:
+            params["next_token"] = next_token
+
+        api_call_count += 1
+        if progress_callback:
+            progress_callback(
+                15,
+                f"Invoice data API call {api_call_count} in progress"
+            )
+
+        response = requests.get(CUSTOMER_INVOICES_API_URL, headers=api_headers(), params=params, timeout=30)
+        if response.status_code != 200:
+            raise RuntimeError(f"Failed to fetch customer invoices: {response.status_code} {response.text}")
+
+        response_data = response.json()
+        for invoice in response_data.get("data", []):
+            invoice_datetime = parse_api_datetime(invoice.get("date_invoice"))
+            if not invoice_datetime:
+                continue
+
+            invoice_date = invoice_datetime.date()
+            if start_date <= invoice_date <= end_date:
+                invoices.append(invoice)
+
+        next_token = response_data.get("next_token")
+        if not next_token:
+            break
+
+    return invoices
+
+def get_cached_invoice_report(report_key):
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT fetched_at, payload FROM invoice_report_cache WHERE report_key = ?",
+            (report_key,)
+        )
+        row = cursor.fetchone()
+
+    if not row:
+        return None, None
+
+    fetched_at = datetime.fromisoformat(row[0])
+    invoices = json.loads(row[1])
+    return invoices, fetched_at
+
+def cache_invoice_report(report_key, invoices, fetched_at):
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT OR REPLACE INTO invoice_report_cache (report_key, fetched_at, payload)
+            VALUES (?, ?, ?)
+        """, (report_key, fetched_at.isoformat(), json.dumps(invoices)))
+        conn.commit()
+
+def get_cached_invoice_detail(invoice_id):
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT fetched_at, payload FROM invoice_detail_cache WHERE invoice_id = ?",
+            (invoice_id,)
+        )
+        row = cursor.fetchone()
+
+    if not row:
+        return None, None
+
+    fetched_at = datetime.fromisoformat(row[0])
+    invoice_detail = json.loads(row[1])
+    return invoice_detail, fetched_at
+
+def cache_invoice_detail(invoice_id, invoice_detail, fetched_at):
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT OR REPLACE INTO invoice_detail_cache (invoice_id, fetched_at, payload)
+            VALUES (?, ?, ?)
+        """, (invoice_id, fetched_at.isoformat(), json.dumps(invoice_detail)))
+        conn.commit()
+
+def fetch_invoice_detail(invoice_id):
+    response = requests.get(
+        f"{CUSTOMER_INVOICES_API_URL}/{invoice_id}",
+        headers=api_headers(),
+        timeout=30
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"Failed to fetch invoice detail {invoice_id}: {response.status_code} {response.text}")
+
+    return response.json()
+
+def get_invoice_detail(invoice_id, force_refresh=False):
+    invoice_detail, _ = get_invoice_detail_with_source(invoice_id, force_refresh=force_refresh)
+    return invoice_detail
+
+def get_invoice_detail_with_source(invoice_id, force_refresh=False):
+    if not invoice_id:
+        return None, "missing"
+
+    cached_invoice, _ = get_cached_invoice_detail(invoice_id)
+    if cached_invoice is not None and not force_refresh:
+        return cached_invoice, "sqlite"
+
+    invoice_detail = fetch_invoice_detail(invoice_id)
+    cache_invoice_detail(invoice_id, invoice_detail, datetime.now())
+    return invoice_detail, "api"
+
+def format_invoice_line_items(line_items):
+    formatted_line_items = []
+    for line_item in line_items or []:
+        formatted_line_items.append({
+            "quantity": line_item.get("quantity", ""),
+            "description": line_item.get("description", ""),
+            "unit_price": line_item.get("unit_price", 0),
+            "item_name": line_item.get("item_name", "")
+        })
+
+    return formatted_line_items
+
+def enrich_invoices_with_line_items(invoices, force_refresh=False, progress_callback=None):
+    invoice_count = len(invoices)
+    for index, invoice in enumerate(invoices, start=1):
+        invoice["line_items"] = []
+        invoice_id = invoice.get("id")
+        if not invoice_id:
+            continue
+
+        try:
+            invoice_detail, source = get_invoice_detail_with_source(invoice_id, force_refresh=force_refresh)
+        except Exception as e:
+            logging.error(f"Failed to enrich invoice {invoice.get('invoice_number')}: {e}")
+            continue
+
+        invoice["line_items"] = format_invoice_line_items(invoice_detail.get("line_items") if invoice_detail else [])
+        if progress_callback and invoice_count:
+            progress = 45 + int((index / invoice_count) * 50)
+            progress_callback(
+                progress,
+                f"Invoice line item data {source} call {index} out of {invoice_count}"
+            )
+
+def get_invoices_for_period(report_key, start_date, end_date, force_refresh=False, progress_callback=None):
+    now = datetime.now()
+    if progress_callback:
+        progress_callback(5, "Invoice data sqlite call 1 out of 1")
+
+    cached_invoices, fetched_at = get_cached_invoice_report(report_key)
+
+    if (
+        not force_refresh
+        and cached_invoices is not None
+    ):
+        return cached_invoices, fetched_at
+
+    invoices = fetch_invoices_for_period(start_date, end_date, progress_callback=progress_callback)
+    cache_invoice_report(report_key, invoices, now)
+    return invoices, now
 
 # Sync with API
 def sync_with_api(overall=False):
@@ -136,7 +350,7 @@ def sync_with_api(overall=False):
                     job.get("priority", "Unknown"),
                     job.get("due_date", "Unknown"),
                     job.get("status", "Unknown"),
-                    job.get("date_completed", None),
+                    job.get("date_completed") or None,
                     job.get("id", None)  # Use "id" from the API response
                 ))
                 logging.info(f"Job fetched: {job}")
@@ -184,7 +398,8 @@ def get_cached_jobs(page=1, per_page=20, search_query=None):
             cursor.execute("""
                 SELECT job_number, job_type, job_date, arrival_time, removal_time, job_summary, job_location, last_modified, id
                 FROM jobs
-                WHERE (job_summary LIKE ? OR job_location LIKE ?) AND date_completed IS NULL
+                WHERE (job_summary LIKE ? OR job_location LIKE ?)
+                    AND (date_completed IS NULL OR date_completed = '')
                 ORDER BY last_modified DESC
                 LIMIT ? OFFSET ?
             """, (f"%{search_query}%", f"%{search_query}%", per_page, offset))
@@ -192,7 +407,7 @@ def get_cached_jobs(page=1, per_page=20, search_query=None):
             cursor.execute("""
                 SELECT job_number, job_type, job_date, arrival_time, removal_time, job_summary, job_location, last_modified, id
                 FROM jobs
-                WHERE date_completed IS NULL
+                WHERE date_completed IS NULL OR date_completed = ''
                 ORDER BY last_modified DESC
                 LIMIT ? OFFSET ?
             """, (per_page, offset))
@@ -203,7 +418,8 @@ def get_cached_jobs(page=1, per_page=20, search_query=None):
         cursor.execute("""
             SELECT COUNT(*)
             FROM jobs
-            WHERE (job_summary LIKE ? OR job_location LIKE ?) AND date_completed IS NULL
+            WHERE (job_summary LIKE ? OR job_location LIKE ?)
+                AND (date_completed IS NULL OR date_completed = '')
         """, (f"%{search_query}%", f"%{search_query}%" if search_query else "%%"))
         total_jobs = cursor.fetchone()[0]
 
@@ -244,9 +460,194 @@ def sync_status_endpoint():
 def admin_portal():
     return render_template("admin.html", parse_errors=PARSE_ERRORS)
 
+def update_report_job(job_id, **updates):
+    with report_jobs_lock:
+        report_jobs.setdefault(job_id, {}).update(updates)
+
+def build_report_payload(report_year, report_key, report_title, start_date, end_date, include_voided=False, force_refresh=False, progress_callback=None):
+    error = None
+    invoices = []
+    fetched_at = None
+
+    try:
+        invoices, fetched_at = get_invoices_for_period(
+            report_key,
+            start_date,
+            end_date,
+            force_refresh=force_refresh,
+            progress_callback=progress_callback
+        )
+    except Exception as e:
+        error = str(e)
+        logging.error(f"{report_title} invoice report failed: {e}")
+
+    voided_count = sum(1 for invoice in invoices if (invoice.get("status") or "").lower() == "voided")
+    if not include_voided:
+        invoices = [invoice for invoice in invoices if (invoice.get("status") or "").lower() != "voided"]
+
+    enrich_invoices_with_line_items(
+        invoices,
+        force_refresh=force_refresh,
+        progress_callback=progress_callback
+    )
+
+    total_amount = sum((Decimal(invoice.get("amount_tax_ex") or "0") for invoice in invoices), Decimal("0"))
+    return {
+        "report_title": report_title,
+        "report_year": report_year,
+        "start_date_label": format_date_label(start_date),
+        "end_date_label": format_date_label(end_date),
+        "invoices": invoices,
+        "invoice_count": len(invoices),
+        "include_voided": include_voided,
+        "voided_count": voided_count,
+        "total_amount": f"{total_amount:,.2f}",
+        "fetched_at": fetched_at.strftime("%Y-%m-%d %H:%M:%S") if fetched_at else None,
+        "error": error
+    }
+
+def load_report_in_background(job_id, report_year, include_voided=False, force_refresh=False):
+    report_config = REPORT_PERIODS[report_year]
+
+    def report_progress(progress, message):
+        update_report_job(
+            job_id,
+            progress=progress,
+            message=message
+        )
+
+    try:
+        update_report_job(
+            job_id,
+            status="loading",
+            progress=1,
+            message="Preparing report load"
+        )
+        payload = build_report_payload(
+            report_year=report_year,
+            include_voided=include_voided,
+            force_refresh=force_refresh,
+            progress_callback=report_progress,
+            **report_config
+        )
+        update_report_job(
+            job_id,
+            status="complete",
+            progress=100,
+            message="Report loaded",
+            result=payload
+        )
+    except Exception as e:
+        logging.error(f"Report load failed: {e}")
+        update_report_job(
+            job_id,
+            status="error",
+            progress=100,
+            message=str(e)
+        )
+
+# Reports Endpoint
+@app.route("/reports")
+def reports():
+    report_year = request.args.get("year", "fy26")
+    if report_year not in REPORT_PERIODS:
+        report_year = "fy26"
+
+    report_config = REPORT_PERIODS[report_year]
+    include_voided = request.args.get("include_voided") == "1"
+    return render_template(
+        "fy_report.html",
+        report_title=report_config["report_title"],
+        report_year=report_year,
+        report_url=url_for("reports"),
+        refresh_url=url_for(
+            "reports",
+            year=report_year,
+            refresh=1,
+            include_voided=1 if include_voided else None
+        ),
+        start_date_label=format_date_label(report_config["start_date"]),
+        end_date_label=format_date_label(report_config["end_date"]),
+        include_voided=include_voided,
+        force_refresh=request.args.get("refresh") == "1"
+    )
+
+@app.route("/reports/start")
+def start_report_load():
+    report_year = request.args.get("year", "fy26")
+    if report_year not in REPORT_PERIODS:
+        report_year = "fy26"
+
+    include_voided = request.args.get("include_voided") == "1"
+    force_refresh = request.args.get("refresh") == "1"
+    job_id = f"{report_year}-{int(time.time() * 1000)}"
+    update_report_job(
+        job_id,
+        status="queued",
+        progress=0,
+        message="Queued report load"
+    )
+
+    thread = Thread(
+        target=load_report_in_background,
+        args=(job_id, report_year, include_voided, force_refresh)
+    )
+    thread.daemon = True
+    thread.start()
+    return jsonify({"job_id": job_id})
+
+@app.route("/reports/status/<job_id>")
+def report_load_status(job_id):
+    with report_jobs_lock:
+        job = report_jobs.get(job_id)
+
+    if not job:
+        return jsonify({"status": "error", "progress": 100, "message": "Report load was not found"}), 404
+
+    return jsonify({
+        "status": job.get("status"),
+        "progress": job.get("progress", 0),
+        "message": job.get("message", "")
+    })
+
+@app.route("/reports/content/<job_id>")
+def report_load_content(job_id):
+    with report_jobs_lock:
+        job = report_jobs.get(job_id)
+
+    if not job:
+        return ("Report load was not found", 404)
+    if job.get("status") != "complete":
+        return ("Report is still loading", 202)
+
+    return render_template("report_content.html", **job["result"])
+
+@app.route("/invoices/<invoice_id>")
+def invoice_detail_page(invoice_id):
+    error = None
+    invoice = None
+
+    try:
+        invoice = get_invoice_detail(invoice_id)
+    except Exception as e:
+        error = str(e)
+        logging.error(f"Invoice detail page failed for {invoice_id}: {e}")
+
+    return render_template("invoice_detail.html", invoice=invoice, error=error)
+
+# FY25 Report Endpoint
+@app.route("/fy25-report")
+def fy25_report():
+    return redirect(url_for("reports", year="fy25"))
+
+# FY26 Report Endpoint
+@app.route("/fy26-report")
+def fy26_report():
+    return redirect(url_for("reports", year="fy26"))
+
 if __name__ == "__main__":
     init_db()
     logging.info("Database initialized.")
     background_sync(overall=True)
     logging.info("Triggered initial background sync.")
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True)

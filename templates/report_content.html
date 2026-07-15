@@ -1,0 +1,167 @@
+<section class="report-summary">
+    <h2>Customer Invoices</h2>
+    <p>Invoice dates from {{ start_date_label }} to {{ end_date_label }}.</p>
+    {% if error %}
+        <p class="error-message">{{ error }}</p>
+    {% else %}
+        <p><strong>{{ invoice_count }}</strong> invoices found.</p>
+        {% if not include_voided and voided_count %}
+            <p>{{ voided_count }} voided invoices hidden.</p>
+        {% endif %}
+        <p><strong>${{ total_amount }}</strong> total invoice amount excluding tax.</p>
+        {% if fetched_at %}
+            <p>Last fetched from FieldMagic: {{ fetched_at }}</p>
+        {% endif %}
+    {% endif %}
+</section>
+
+{% if invoices %}
+    <div class="report-view-controls">
+        <button type="button" id="product-view-button" class="report-view-button">Product View</button>
+    </div>
+
+    <div id="invoice-view">
+    <table class="report-invoice-table sortable-report-table">
+        <thead>
+            <tr>
+                <th data-sort-type="string">Invoice Number</th>
+                <th data-sort-type="date">Invoice Date</th>
+                <th data-sort-type="string">Status</th>
+                <th data-sort-type="string">Customer</th>
+                <th data-sort-type="string">Job</th>
+                <th data-sort-type="string">Department</th>
+                <th data-sort-type="number">Amount Inc Tax</th>
+                <th data-sort-type="number">Amount Ex Tax</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for invoice in invoices %}
+                <tr>
+                    <td>{{ invoice.invoice_number }}</td>
+                    <td data-sort-value="{{ invoice.date_invoice[:10] if invoice.date_invoice else "" }}">{{ invoice.date_invoice[:10] if invoice.date_invoice else "" }}</td>
+                    <td>{{ invoice.status }}</td>
+                    <td>{{ invoice.customer_text }}</td>
+                    <td>{{ invoice.job_text }}</td>
+                    <td>{{ invoice.department_text }}</td>
+                    <td data-sort-value="{{ invoice.amount_tax_inc|float }}">${{ "%.2f"|format(invoice.amount_tax_inc|float) }}</td>
+                    <td data-sort-value="{{ invoice.amount_tax_ex|float }}">${{ "%.2f"|format(invoice.amount_tax_ex|float) }}</td>
+                </tr>
+                {% if invoice.line_items %}
+                    <tr class="invoice-line-items-row">
+                        <td colspan="8">
+                            <table class="invoice-line-items-table">
+                                <thead>
+                                    <tr>
+                                        <th>Product Code</th>
+                                        <th>Qty</th>
+                                        <th>Description</th>
+                                        <th>Unit Price</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for line_item in invoice.line_items %}
+                                        <tr
+                                            class="invoice-line-item"
+                                            data-product-code="{{ line_item.item_name }}"
+                                            data-quantity="{{ line_item.quantity }}"
+                                            data-unit-price="{{ line_item.unit_price }}"
+                                            data-invoice-id="{{ invoice.id }}"
+                                            data-invoice-number="{{ invoice.invoice_number }}"
+                                            data-invoice-customer="{{ invoice.customer_text }}"
+                                            data-invoice-date="{{ invoice.date_invoice[:10] if invoice.date_invoice else "" }}"
+                                            data-invoice-url="{{ url_for('invoice_detail_page', invoice_id=invoice.id) }}"
+                                        >
+                                            <td>{{ line_item.item_name }}</td>
+                                            <td>{{ line_item.quantity }}</td>
+                                            <td>{{ line_item.description }}</td>
+                                            <td>${{ "%.2f"|format(line_item.unit_price|float) }}</td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </td>
+                    </tr>
+                {% endif %}
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+
+    <div id="product-view" class="product-view" hidden>
+        <div class="product-view-toolbar">
+            <label for="product-smart-filter">Smart filter</label>
+            <input
+                type="text"
+                id="product-smart-filter"
+                class="product-smart-filter"
+                placeholder="e.g. IM40W3x03(WHI)"
+                autocomplete="off"
+            >
+            <p class="product-smart-filter-hint">Matches product codes containing your text. Use ^ABC to match codes starting with ABC.</p>
+            <div class="product-pricing-metrics-form" aria-label="Product-level pricing metrics inputs">
+                <div class="product-price-field">
+                    <label for="product-list-price">List price</label>
+                    <input
+                        type="number"
+                        id="product-list-price"
+                        class="product-price-input"
+                        min="0"
+                        step="0.01"
+                        placeholder="e.g. 265.00"
+                    >
+                </div>
+                <label class="product-mid-tier-toggle" for="include-mid-tier-price">
+                    <input
+                        type="checkbox"
+                        id="include-mid-tier-price"
+                    >
+                    Include mid tier price
+                </label>
+                <div class="product-price-field" id="product-mid-price-field" hidden>
+                    <label for="product-mid-price">Mid tier price</label>
+                    <input
+                        type="number"
+                        id="product-mid-price"
+                        class="product-price-input"
+                        min="0"
+                        step="0.01"
+                        disabled
+                        placeholder="e.g. 225.00"
+                    >
+                </div>
+                <div class="product-price-field">
+                    <label for="product-volume-price">Volume price</label>
+                    <input
+                        type="number"
+                        id="product-volume-price"
+                        class="product-price-input"
+                        min="0"
+                        step="0.01"
+                        placeholder="e.g. 195.00"
+                    >
+                </div>
+                <button type="button" id="generate-product-metrics" class="report-view-button">
+                    Generate Product-Level Metrics
+                </button>
+            </div>
+            <div id="product-pricing-metrics" class="product-pricing-metrics" hidden></div>
+        </div>
+        <table class="sortable-report-table">
+            <thead>
+                <tr>
+                    <th data-sort-type="string">Product Code</th>
+                    <th id="product-price-heading" data-sort-type="number">Unit Price <span class="explain-tooltip" tabindex="0" title="The unit price used for this product row. In combined product mode this becomes the weighted average price.">?</span></th>
+                    <th data-sort-type="number">Median Price <span class="explain-tooltip" tabindex="0" title="The middle selling price by quantity. Half of units sold at or below this price.">?</span></th>
+                    <th data-sort-type="number">P25-P75 Range <span class="explain-tooltip" tabindex="0" title="The middle 50% of sold quantities. This is the normal trading price band.">?</span></th>
+                    <th data-sort-type="string">Price Risk <span class="explain-tooltip" tabindex="0" title="A simple warning based on price variation and how much quantity is sold outside the normal band. Hover each badge for the specific reason.">?</span></th>
+                    <th data-sort-type="number">Qty</th>
+                    <th data-sort-type="number">Sum Value</th>
+                    <th data-sort-type="string">View Invoice</th>
+                </tr>
+            </thead>
+            <tbody id="product-view-body"></tbody>
+        </table>
+    </div>
+{% elif not error %}
+    <p>No invoices found for this financial year.</p>
+{% endif %}

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ report_title }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <script src="{{ url_for('static', filename='script.js') }}" defer></script>
+</head>
+<body data-report-year="{{ report_year }}" data-include-voided="{{ 1 if include_voided else 0 }}" data-force-refresh="{{ 1 if force_refresh else 0 }}">
+    <header>
+        <nav class="nav-links">
+            <a href="/" class="nav-button">Job Listings</a>
+            <a href="/admin" class="nav-button">Admin Portal</a>
+            <a href="/reports" class="nav-button">Reports</a>
+        </nav>
+        <h1>{{ report_title }}</h1>
+        <div class="report-year-selector">
+            <a href="{{ url_for('reports', year='fy26') }}" class="report-year-button {% if report_year == 'fy26' %}active{% endif %}">FY26</a>
+            <a href="{{ url_for('reports', year='fy25') }}" class="report-year-button {% if report_year == 'fy25' %}active{% endif %}">FY25</a>
+        </div>
+    </header>
+    <main class="report-page-layout">
+        <div class="report-main-column">
+            <section class="report-summary">
+                <h2>Customer Invoices</h2>
+                <p>Invoice dates from {{ start_date_label }} to {{ end_date_label }}.</p>
+                <p><a href="{{ refresh_url }}">Refresh {{ report_title }} data</a></p>
+            </section>
+
+            <section id="report-loading-panel" class="report-loading-panel">
+                <div class="report-progress-bar">
+                    <div id="report-progress-fill" class="report-progress-fill" style="width: 0%;"></div>
+                </div>
+                <p id="report-progress-percent">0%</p>
+                <p id="report-progress-message">Preparing report load</p>
+            </section>
+
+            <section id="report-content" class="report-content"></section>
+        </div>
+
+        <aside class="report-modifiers">
+            <h2>Modifiers</h2>
+            <form class="report-modifier-form" method="get" action="{{ report_url }}">
+                <input type="hidden" name="year" value="{{ report_year }}">
+                <fieldset>
+                    <legend>Voided invoices</legend>
+                    <label>
+                        <input type="radio" name="include_voided" value="0" onchange="this.form.submit()" {% if not include_voided %}checked{% endif %}>
+                        Exclude
+                    </label>
+                    <label>
+                        <input type="radio" name="include_voided" value="1" onchange="this.form.submit()" {% if include_voided %}checked{% endif %}>
+                        Include
+                    </label>
+                </fieldset>
+                <fieldset>
+                    <legend>Product view</legend>
+                    <label>
+                        <input type="checkbox" id="combine-product-codes">
+                        Combine Product Codes
+                    </label>
+                </fieldset>
+            </form>
+        </aside>
+    </main>
+    <footer>
+        <p>Powered by Flask and SQLite</p>
+    </footer>
+</body>
+</html>

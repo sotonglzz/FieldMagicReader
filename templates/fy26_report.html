@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FY26 Report</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <header>
+        <nav class="nav-links">
+            <a href="/" class="nav-button">Job Listings</a>
+            <a href="/admin" class="nav-button">Admin Portal</a>
+            <a href="/reports" class="nav-button">Reports</a>
+        </nav>
+        <h1>FY26 Report</h1>
+    </header>
+    <main>
+        <section class="report-summary">
+            <h2>Customer Invoices</h2>
+            <p>Invoice dates from 1 July 2025 to 30 June 2026.</p>
+            <p><a href="/fy26-report?refresh=1">Refresh FY26 report data</a></p>
+            {% if error %}
+                <p class="error-message">{{ error }}</p>
+            {% else %}
+                <p><strong>{{ invoice_count }}</strong> invoices found.</p>
+                <p><strong>${{ total_amount }}</strong> total invoice amount including tax.</p>
+                {% if fetched_at %}
+                    <p>Last fetched from FieldMagic: {{ fetched_at }}</p>
+                {% endif %}
+            {% endif %}
+        </section>
+
+        {% if invoices %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Invoice Number</th>
+                        <th>Invoice Date</th>
+                        <th>Status</th>
+                        <th>Customer</th>
+                        <th>Job</th>
+                        <th>Department</th>
+                        <th>Amount Inc Tax</th>
+                        <th>Amount Ex Tax</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for invoice in invoices %}
+                        <tr>
+                            <td>{{ invoice.invoice_number }}</td>
+                            <td>{{ invoice.date_invoice[:10] if invoice.date_invoice else "" }}</td>
+                            <td>{{ invoice.status }}</td>
+                            <td>{{ invoice.customer_text }}</td>
+                            <td>{{ invoice.job_text }}</td>
+                            <td>{{ invoice.department_text }}</td>
+                            <td>${{ "%.2f"|format(invoice.amount_tax_inc|float) }}</td>
+                            <td>${{ "%.2f"|format(invoice.amount_tax_ex|float) }}</td>
+                        </tr>
+                        {% if invoice.line_items %}
+                            <tr class="invoice-line-items-row">
+                                <td colspan="8">
+                                    <table class="invoice-line-items-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Product Code</th>
+                                                <th>Qty</th>
+                                                <th>Description</th>
+                                                <th>Unit Price</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {% for line_item in invoice.line_items %}
+                                                <tr>
+                                                    <td>{{ line_item.item_name }}</td>
+                                                    <td>{{ line_item.quantity }}</td>
+                                                    <td>{{ line_item.description }}</td>
+                                                    <td>${{ "%.2f"|format(line_item.unit_price|float) }}</td>
+                                                </tr>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
+                                </td>
+                            </tr>
+                        {% endif %}
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% elif not error %}
+            <p>No FY26 invoices found.</p>
+        {% endif %}
+    </main>
+    <footer>
+        <p>Powered by Flask and SQLite</p>
+    </footer>
+</body>
+</html>

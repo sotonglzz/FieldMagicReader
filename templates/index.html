@@ -1,6 +1,5 @@
 <!DOCTYPE html>
 <html lang="en">
-    <a href="/admin" class="admin-button">Admin Portal</a>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -10,6 +9,10 @@
 </head>
 <body>
     <header>
+        <nav class="nav-links">
+            <a href="/admin" class="nav-button">Admin Portal</a>
+            <a href="/reports" class="nav-button">Reports</a>
+        </nav>
         <h1>Job Listings</h1>
         <button id="refresh-button" onclick="startBackgroundSync()">Refresh Data</button>
         <div id="sync-status">

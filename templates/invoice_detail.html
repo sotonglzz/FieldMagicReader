@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ invoice.invoice_number if invoice else "Invoice" }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <header>
+        <nav class="nav-links">
+            <a href="{{ url_for('reports') }}" class="nav-button">Reports</a>
+            <a href="{{ url_for('home') }}" class="nav-button">Home</a>
+        </nav>
+        <h1>{{ invoice.invoice_number if invoice else "Invoice" }}</h1>
+    </header>
+
+    <main>
+        {% if error %}
+            <p class="error-message">Invoice could not be loaded: {{ error }}</p>
+        {% elif invoice %}
+            <section class="invoice-detail-summary">
+                <h2>Invoice Details</h2>
+                <dl>
+                    <div>
+                        <dt>Invoice Number</dt>
+                        <dd>{{ invoice.invoice_number }}</dd>
+                    </div>
+                    <div>
+                        <dt>Invoice Date</dt>
+                        <dd>{{ invoice.date_invoice[:10] if invoice.date_invoice else "" }}</dd>
+                    </div>
+                    <div>
+                        <dt>Status</dt>
+                        <dd>{{ invoice.status }}</dd>
+                    </div>
+                    <div>
+                        <dt>Customer</dt>
+                        <dd>{{ invoice.customer_text }}</dd>
+                    </div>
+                    <div>
+                        <dt>Job</dt>
+                        <dd>{{ invoice.job_text }}</dd>
+                    </div>
+                    <div>
+                        <dt>Department</dt>
+                        <dd>{{ invoice.department_text }}</dd>
+                    </div>
+                    <div>
+                        <dt>Amount Inc Tax</dt>
+                        <dd>${{ "%.2f"|format(invoice.amount_tax_inc|float) }}</dd>
+                    </div>
+                    <div>
+                        <dt>Amount Ex Tax</dt>
+                        <dd>${{ "%.2f"|format(invoice.amount_tax_ex|float) }}</dd>
+                    </div>
+                </dl>
+            </section>
+
+            {% if invoice.line_items %}
+                <table class="invoice-line-items-table">
+                    <thead>
+                        <tr>
+                            <th>Product Code</th>
+                            <th>Qty</th>
+                            <th>Description</th>
+                            <th>Unit Price</th>
+                            <th>Total Price</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for line_item in invoice.line_items %}
+                            <tr>
+                                <td>{{ line_item.item_name }}</td>
+                                <td>{{ line_item.quantity }}</td>
+                                <td>{{ line_item.description }}</td>
+                                <td>${{ "%.2f"|format(line_item.unit_price|float) }}</td>
+                                <td>${{ "%.2f"|format((line_item.total_price if line_item.total_price is defined else (line_item.unit_price|float * line_item.quantity|float))|float) }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                <p>No line items found for this invoice.</p>
+            {% endif %}
+        {% else %}
+            <p class="error-message">Invoice could not be loaded.</p>
+        {% endif %}
+    </main>
+</body>
+</html>

@@ -68,6 +68,8 @@ document.addEventListener("DOMContentLoaded", () => {
         reportContent.innerHTML = await response.text();
         setupSortableReportTables(reportContent);
         setupProductViewToggle();
+        setupJobProfitabilityView();
+        setupCalendarView();
         loadingPanel.style.display = "none";
     };
 
@@ -1643,19 +1645,556 @@ function setupProductViewToggle() {
     syncMidTierPriceInput();
 
     button.addEventListener("click", () => {
-        const isProductView = !productView.hidden;
-
-        if (isProductView) {
-            productView.hidden = true;
-            invoiceView.hidden = false;
-            button.textContent = "Product View";
+        if (!productView.hidden) {
+            showReportView("invoice");
             return;
         }
 
         buildProductRows();
-        invoiceView.hidden = true;
-        productView.hidden = false;
-        button.textContent = "Invoice View";
+        showReportView("product");
+    });
+}
+
+function showReportView(name) {
+    const invoiceView = document.getElementById("invoice-view");
+    const productView = document.getElementById("product-view");
+    const profitabilityView = document.getElementById("job-profitability-view");
+    const calendarView = document.getElementById("calendar-view");
+    const productButton = document.getElementById("product-view-button");
+    const profitabilityButton = document.getElementById("job-profitability-view-button");
+    const calendarButton = document.getElementById("calendar-view-button");
+
+    if (invoiceView) {
+        invoiceView.hidden = name !== "invoice";
+    }
+    if (productView) {
+        productView.hidden = name !== "product";
+    }
+    if (profitabilityView) {
+        profitabilityView.hidden = name !== "profitability";
+    }
+    if (calendarView) {
+        calendarView.hidden = name !== "calendar";
+    }
+    if (productButton) {
+        productButton.textContent = name === "product" ? "Invoice View" : "Product View";
+    }
+    if (profitabilityButton) {
+        profitabilityButton.textContent = name === "profitability" ? "Invoice View" : "Job Profitability View";
+    }
+    if (calendarButton) {
+        calendarButton.textContent = name === "calendar" ? "Invoice View" : "Calendar View";
+    }
+}
+
+function escapeReportHtml(value) {
+    const element = document.createElement("div");
+    element.textContent = value ?? "";
+    return element.innerHTML;
+}
+
+function capitalizeWord(value) {
+    const text = String(value || "");
+    return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
+}
+
+function formatDatetimeLabel(value) {
+    if (!value) {
+        return "";
+    }
+
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+        return value;
+    }
+
+    return parsed.toLocaleString("en-AU", {
+        weekday: "short",
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit"
+    });
+}
+
+function staffStatusMessage(status) {
+    if (status === "diy_pickup") {
+        return "DIY/Pickup job — customer collects and returns, no staff required.";
+    }
+
+    if (status === "needs_datetime") {
+        return "No staff matched yet — resolve the install/removal datetime first.";
+    }
+
+    if (status === "no_match") {
+        return "No timesheet shifts matched this job's datetimes.";
+    }
+
+    return "No staff allocated.";
+}
+
+function setDatetimeCell(cell, value, ok, invoiceId) {
+    if (!cell) {
+        return;
+    }
+
+    cell.dataset.sortValue = value || "";
+    cell.innerHTML = "";
+
+    if (value && ok) {
+        cell.textContent = formatDatetimeLabel(value);
+        return;
+    }
+
+    if (value) {
+        const partial = document.createElement("span");
+        partial.className = "datetime-partial";
+        partial.textContent = value;
+        cell.appendChild(partial);
+    }
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ai-parse-datetime report-view-button";
+    button.dataset.invoiceId = invoiceId;
+    button.textContent = "Parse with AI";
+    cell.appendChild(button);
+}
+
+function renderStaffRow(staffRow, data) {
+    const cell = staffRow?.querySelector("td");
+    if (!cell) {
+        return;
+    }
+
+    const allocations = data.staff_allocations || [];
+    if (allocations.length === 0) {
+        cell.innerHTML = `<p class="staff-allocations-empty">${escapeReportHtml(staffStatusMessage(data.staff_status))}</p>`;
+        return;
+    }
+
+    const rows = allocations.map((allocation) => `
+        <tr>
+            <td>${escapeReportHtml(allocation.name)}</td>
+            <td>${escapeReportHtml(capitalizeWord(allocation.kind))}</td>
+            <td>${escapeReportHtml(allocation.shift_span)}</td>
+            <td>${Number(allocation.hours || 0).toFixed(2)}</td>
+        </tr>
+    `).join("");
+
+    cell.innerHTML = `
+        <table class="invoice-line-items-table staff-allocations-table">
+            <thead>
+                <tr>
+                    <th>Staff</th>
+                    <th>Event</th>
+                    <th>Shift Span</th>
+                    <th>Allocated Hours</th>
+                </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+        </table>
+    `;
+}
+
+function applyDatetimeResult(container, invoiceId, data) {
+    const selector = `[data-invoice-id="${invoiceId}"]`;
+    const invoiceRow = container.querySelector(`tr.profitability-invoice-row${selector}`);
+    const staffRow = container.querySelector(`tr.profitability-staff-row${selector}`);
+
+    if (invoiceRow) {
+        setDatetimeCell(invoiceRow.querySelector(".datetime-install"), data.install_datetime, data.install_ok, invoiceId);
+        setDatetimeCell(invoiceRow.querySelector(".datetime-removal"), data.removal_datetime, data.removal_ok, invoiceId);
+    }
+
+    if (staffRow) {
+        renderStaffRow(staffRow, data);
+    }
+}
+
+function setupAiParseQueue(container) {
+    const queue = [];
+    let processing = false;
+
+    const processNext = async () => {
+        if (processing || queue.length === 0) {
+            return;
+        }
+
+        processing = true;
+        const button = queue.shift();
+        const invoiceId = button.dataset.invoiceId;
+        button.disabled = true;
+        button.textContent = "Parsing…";
+
+        try {
+            const response = await fetch(`/invoices/${encodeURIComponent(invoiceId)}/parse-datetimes`, {
+                method: "POST"
+            });
+
+            if (!response.ok) {
+                const errorBody = await response.json().catch(() => ({}));
+                throw new Error(errorBody.error || `Request failed (${response.status})`);
+            }
+
+            const data = await response.json();
+            applyDatetimeResult(container, invoiceId, data);
+        } catch (error) {
+            console.error("AI datetime parse failed:", error);
+            button.disabled = false;
+            button.textContent = "Retry AI";
+            button.title = error.message || "AI parse failed";
+        } finally {
+            processing = false;
+            processNext();
+        }
+    };
+
+    container.addEventListener("click", (event) => {
+        const button = event.target.closest(".ai-parse-datetime");
+        if (!button || button.disabled || !container.contains(button)) {
+            return;
+        }
+
+        queue.push(button);
+        processNext();
+    });
+}
+
+function setupJobProfitabilityView() {
+    const button = document.getElementById("job-profitability-view-button");
+    const view = document.getElementById("job-profitability-view");
+
+    if (!button || !view) {
+        return;
+    }
+
+    button.addEventListener("click", () => {
+        showReportView(view.hidden ? "profitability" : "invoice");
+    });
+
+    setupAiParseQueue(view);
+}
+
+function setupCalendarView() {
+    const button = document.getElementById("calendar-view-button");
+    const view = document.getElementById("calendar-view");
+
+    if (!button || !view) {
+        return;
+    }
+
+    const grid = document.getElementById("calendar-grid");
+    const monthLabel = document.getElementById("calendar-month-label");
+    const monthSelect = document.getElementById("calendar-month-select");
+    const prevButton = document.getElementById("calendar-prev");
+    const nextButton = document.getElementById("calendar-next");
+    const detailsPanel = document.getElementById("calendar-day-details");
+    const dataElement = document.getElementById("calendar-events-data");
+
+    let rawEvents = [];
+    try {
+        rawEvents = JSON.parse(dataElement?.textContent || "[]");
+    } catch (error) {
+        console.error("Unable to parse calendar events:", error);
+        rawEvents = [];
+    }
+
+    const pad = (value) => String(value).padStart(2, "0");
+    const toDayKey = (date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    const toMonthKey = (year, month) => `${year}-${pad(month + 1)}`;
+    const weekdayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+    const formatCurrency = (value) => new Intl.NumberFormat("en-AU", {
+        style: "currency",
+        currency: "AUD"
+    }).format(Number(value) || 0);
+
+    const formatTime = (date) => date.toLocaleTimeString("en-AU", {
+        hour: "numeric",
+        minute: "2-digit"
+    });
+
+    const eventsByDay = new Map();
+    const monthsWithEvents = new Set();
+
+    rawEvents.forEach((event) => {
+        if (event.type !== "install" && event.type !== "removal") {
+            return;
+        }
+
+        const date = new Date(event.datetime);
+        if (Number.isNaN(date.getTime())) {
+            return;
+        }
+
+        const dayKey = toDayKey(date);
+        if (!eventsByDay.has(dayKey)) {
+            eventsByDay.set(dayKey, []);
+        }
+
+        eventsByDay.get(dayKey).push({ ...event, date });
+        monthsWithEvents.add(toMonthKey(date.getFullYear(), date.getMonth()));
+    });
+
+    const sortedMonths = Array.from(monthsWithEvents).sort();
+    let current;
+
+    if (sortedMonths.length > 0) {
+        const [year, month] = sortedMonths[0].split("-").map(Number);
+        current = { year, month: month - 1 };
+    } else {
+        const now = new Date();
+        current = { year: now.getFullYear(), month: now.getMonth() };
+    }
+
+    let selectedDayKey = null;
+
+    if (monthSelect) {
+        monthSelect.innerHTML = "";
+
+        if (sortedMonths.length === 0) {
+            const option = document.createElement("option");
+            option.textContent = "No dated jobs";
+            monthSelect.appendChild(option);
+            monthSelect.disabled = true;
+        } else {
+            sortedMonths.forEach((key) => {
+                const [year, month] = key.split("-").map(Number);
+                const option = document.createElement("option");
+                option.value = key;
+                option.textContent = new Date(year, month - 1, 1).toLocaleDateString("en-AU", {
+                    month: "long",
+                    year: "numeric"
+                });
+                monthSelect.appendChild(option);
+            });
+        }
+    }
+
+    const renderDetailsEmpty = () => {
+        if (detailsPanel) {
+            detailsPanel.innerHTML = `<p class="calendar-details-empty">Select a day to see its installs and removals.</p>`;
+        }
+    };
+
+    const buildDetailsSection = (title, className, list) => {
+        if (list.length === 0) {
+            return "";
+        }
+
+        const rows = list.map((event) => {
+            const estimated = event.ok
+                ? ""
+                : `<span class="calendar-estimated" title="Estimated from text — confirm before relying on it">est.</span>`;
+            const link = event.url
+                ? `<a class="report-view-button calendar-invoice-link" href="${escapeReportHtml(event.url)}" target="_blank" rel="noopener">View</a>`
+                : "";
+
+            return `
+                <tr>
+                    <td>${escapeReportHtml(formatTime(event.date))}${estimated}</td>
+                    <td>${escapeReportHtml(event.invoiceNumber || "")}</td>
+                    <td>${escapeReportHtml(event.customer || "")}</td>
+                    <td>${escapeReportHtml(event.job || "")}</td>
+                    <td>${escapeReportHtml(formatCurrency(event.amount))}</td>
+                    <td>${link}</td>
+                </tr>
+            `;
+        }).join("");
+
+        return `
+            <div class="calendar-details-section">
+                <h4 class="calendar-details-heading ${className}">${escapeReportHtml(title)} (${list.length})</h4>
+                <table class="invoice-line-items-table calendar-details-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Invoice</th>
+                            <th>Customer</th>
+                            <th>Job</th>
+                            <th>Amount Ex Tax</th>
+                            <th>View</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>
+        `;
+    };
+
+    const renderDetails = (dayKey) => {
+        if (!detailsPanel) {
+            return;
+        }
+
+        const dayEvents = (eventsByDay.get(dayKey) || []).slice().sort((left, right) => left.date - right.date);
+        if (dayEvents.length === 0) {
+            renderDetailsEmpty();
+            return;
+        }
+
+        const [year, month, day] = dayKey.split("-").map(Number);
+        const heading = new Date(year, month - 1, day).toLocaleDateString("en-AU", {
+            weekday: "long",
+            day: "numeric",
+            month: "long",
+            year: "numeric"
+        });
+        const installs = dayEvents.filter((event) => event.type === "install");
+        const removals = dayEvents.filter((event) => event.type === "removal");
+
+        detailsPanel.innerHTML = `
+            <h3 class="calendar-details-title">${escapeReportHtml(heading)}</h3>
+            ${buildDetailsSection("Installs", "install", installs)}
+            ${buildDetailsSection("Removals", "removal", removals)}
+        `;
+    };
+
+    const render = () => {
+        if (!grid) {
+            return;
+        }
+
+        grid.innerHTML = "";
+
+        if (monthLabel) {
+            monthLabel.textContent = new Date(current.year, current.month, 1).toLocaleDateString("en-AU", {
+                month: "long",
+                year: "numeric"
+            });
+        }
+
+        if (monthSelect && !monthSelect.disabled) {
+            const key = toMonthKey(current.year, current.month);
+            if (monthsWithEvents.has(key)) {
+                monthSelect.value = key;
+            }
+        }
+
+        weekdayNames.forEach((name) => {
+            const head = document.createElement("div");
+            head.className = "calendar-weekday";
+            head.textContent = name;
+            grid.appendChild(head);
+        });
+
+        const firstOfMonth = new Date(current.year, current.month, 1);
+        const startOffset = (firstOfMonth.getDay() + 6) % 7;
+        const daysInMonth = new Date(current.year, current.month + 1, 0).getDate();
+        const todayKey = toDayKey(new Date());
+
+        for (let index = 0; index < startOffset; index += 1) {
+            const blank = document.createElement("div");
+            blank.className = "calendar-day is-blank";
+            grid.appendChild(blank);
+        }
+
+        for (let day = 1; day <= daysInMonth; day += 1) {
+            const date = new Date(current.year, current.month, day);
+            const dayKey = toDayKey(date);
+            const dayEvents = eventsByDay.get(dayKey) || [];
+            const installCount = dayEvents.filter((event) => event.type === "install").length;
+            const removalCount = dayEvents.filter((event) => event.type === "removal").length;
+
+            const cell = document.createElement("div");
+            cell.className = "calendar-day";
+            cell.dataset.dayKey = dayKey;
+
+            if (dayEvents.length > 0) {
+                cell.classList.add("has-events");
+            }
+            if (dayKey === todayKey) {
+                cell.classList.add("is-today");
+            }
+            if (dayKey === selectedDayKey) {
+                cell.classList.add("is-selected");
+            }
+
+            const number = document.createElement("div");
+            number.className = "calendar-day-number";
+            number.textContent = String(day);
+            cell.appendChild(number);
+
+            if (installCount > 0) {
+                const pill = document.createElement("span");
+                pill.className = "calendar-pill install";
+                pill.textContent = `${installCount} install${installCount > 1 ? "s" : ""}`;
+                cell.appendChild(pill);
+            }
+
+            if (removalCount > 0) {
+                const pill = document.createElement("span");
+                pill.className = "calendar-pill removal";
+                pill.textContent = `${removalCount} removal${removalCount > 1 ? "s" : ""}`;
+                cell.appendChild(pill);
+            }
+
+            if (dayEvents.length > 0) {
+                cell.tabIndex = 0;
+                cell.setAttribute("role", "button");
+
+                const activate = () => {
+                    selectedDayKey = dayKey;
+                    grid.querySelectorAll(".calendar-day.is-selected").forEach((element) => {
+                        element.classList.remove("is-selected");
+                    });
+                    cell.classList.add("is-selected");
+                    renderDetails(dayKey);
+                };
+
+                cell.addEventListener("click", activate);
+                cell.addEventListener("keydown", (event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        activate();
+                    }
+                });
+            }
+
+            grid.appendChild(cell);
+        }
+
+        if (selectedDayKey && selectedDayKey.startsWith(toMonthKey(current.year, current.month))) {
+            renderDetails(selectedDayKey);
+        } else {
+            renderDetailsEmpty();
+        }
+    };
+
+    if (prevButton) {
+        prevButton.addEventListener("click", () => {
+            const target = new Date(current.year, current.month - 1, 1);
+            current = { year: target.getFullYear(), month: target.getMonth() };
+            render();
+        });
+    }
+
+    if (nextButton) {
+        nextButton.addEventListener("click", () => {
+            const target = new Date(current.year, current.month + 1, 1);
+            current = { year: target.getFullYear(), month: target.getMonth() };
+            render();
+        });
+    }
+
+    if (monthSelect) {
+        monthSelect.addEventListener("change", () => {
+            if (!monthSelect.value) {
+                return;
+            }
+
+            const [year, month] = monthSelect.value.split("-").map(Number);
+            current = { year, month: month - 1 };
+            render();
+        });
+    }
+
+    render();
+
+    button.addEventListener("click", () => {
+        showReportView(view.hidden ? "calendar" : "invoice");
     });
 }
 

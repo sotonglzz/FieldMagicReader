@@ -18,6 +18,8 @@
 {% if invoices %}
     <div class="report-view-controls">
         <button type="button" id="product-view-button" class="report-view-button">Product View</button>
+        <button type="button" id="job-profitability-view-button" class="report-view-button">Job Profitability View</button>
+        <button type="button" id="calendar-view-button" class="report-view-button">Calendar View</button>
     </div>
 
     <div id="invoice-view">
@@ -162,6 +164,121 @@
             <tbody id="product-view-body"></tbody>
         </table>
     </div>
+
+    <div id="job-profitability-view" hidden>
+        <table class="report-profitability-table sortable-report-table">
+            <thead>
+                <tr>
+                    <th data-sort-type="string">Invoice Number</th>
+                    <th data-sort-type="date">Invoice Date</th>
+                    <th data-sort-type="string">Customer</th>
+                    <th data-sort-type="string">Job</th>
+                    <th data-sort-type="number">Amount Ex Tax</th>
+                    <th data-sort-type="date">Job Install Datetime</th>
+                    <th data-sort-type="date">Job Removal Datetime</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for invoice in invoices %}
+                    <tr class="profitability-invoice-row" data-invoice-id="{{ invoice.id }}">
+                        <td>{{ invoice.invoice_number }}</td>
+                        <td data-sort-value="{{ invoice.date_invoice[:10] if invoice.date_invoice else "" }}">{{ invoice.date_invoice[:10] if invoice.date_invoice else "" }}</td>
+                        <td>{{ invoice.customer_text }}</td>
+                        <td>{{ invoice.job_text }}</td>
+                        <td data-sort-value="{{ invoice.amount_tax_ex|float }}">${{ "%.2f"|format(invoice.amount_tax_ex|float) }}</td>
+                        <td class="datetime-cell datetime-install" data-sort-value="{{ invoice.install_datetime or "" }}">
+                            {% if invoice.install_ok %}
+                                {{ invoice.install_datetime|datetime_label }}
+                            {% else %}
+                                {% if invoice.install_datetime %}<span class="datetime-partial">{{ invoice.install_datetime }}</span>{% endif %}
+                                <button type="button" class="ai-parse-datetime report-view-button" data-invoice-id="{{ invoice.id }}">Parse with AI</button>
+                            {% endif %}
+                        </td>
+                        <td class="datetime-cell datetime-removal" data-sort-value="{{ invoice.removal_datetime or "" }}">
+                            {% if invoice.removal_ok %}
+                                {{ invoice.removal_datetime|datetime_label }}
+                            {% else %}
+                                {% if invoice.removal_datetime %}<span class="datetime-partial">{{ invoice.removal_datetime }}</span>{% endif %}
+                                <button type="button" class="ai-parse-datetime report-view-button" data-invoice-id="{{ invoice.id }}">Parse with AI</button>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr class="invoice-line-items-row profitability-staff-row" data-invoice-id="{{ invoice.id }}">
+                        <td colspan="7">
+                            {% if invoice.staff_allocations %}
+                                <table class="invoice-line-items-table staff-allocations-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Staff</th>
+                                            <th>Event</th>
+                                            <th>Shift Span</th>
+                                            <th>Allocated Hours</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for allocation in invoice.staff_allocations %}
+                                            <tr>
+                                                <td>{{ allocation.name }}</td>
+                                                <td>{{ allocation.kind|capitalize }}</td>
+                                                <td>{{ allocation.shift_span }}</td>
+                                                <td>{{ "%.2f"|format(allocation.hours) }}</td>
+                                            </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            {% else %}
+                                <p class="staff-allocations-empty">
+                                    {% if invoice.staff_status == "diy_pickup" %}
+                                        DIY/Pickup job &mdash; customer collects and returns, no staff required.
+                                    {% elif invoice.staff_status == "needs_datetime" %}
+                                        No staff matched yet &mdash; resolve the install/removal datetime first.
+                                    {% elif invoice.staff_status == "no_match" %}
+                                        No timesheet shifts matched this job's datetimes.
+                                    {% else %}
+                                        No staff allocated.
+                                    {% endif %}
+                                </p>
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div id="calendar-view" hidden>
+        <div class="calendar-toolbar">
+            <div class="calendar-nav">
+                <button type="button" id="calendar-prev" class="calendar-nav-button" aria-label="Previous month">&lsaquo;</button>
+                <h3 id="calendar-month-label" class="calendar-month-label"></h3>
+                <button type="button" id="calendar-next" class="calendar-nav-button" aria-label="Next month">&rsaquo;</button>
+            </div>
+            <label class="calendar-jump">
+                <span>Jump to</span>
+                <select id="calendar-month-select"></select>
+            </label>
+            <div class="calendar-legend">
+                <span class="calendar-legend-item"><span class="calendar-legend-swatch install"></span>Install</span>
+                <span class="calendar-legend-item"><span class="calendar-legend-swatch removal"></span>Removal</span>
+            </div>
+        </div>
+        <div id="calendar-grid" class="calendar-grid"></div>
+        <div id="calendar-day-details" class="calendar-day-details">
+            <p class="calendar-details-empty">Select a day to see its installs and removals.</p>
+        </div>
+    </div>
+
+    <script type="application/json" id="calendar-events-data">[
+        {%- for invoice in invoices -%}
+            {%- if invoice.install_datetime -%}
+            {"type": "install", "datetime": {{ invoice.install_datetime|tojson }}, "ok": {{ invoice.install_ok|tojson }}, "invoiceNumber": {{ invoice.invoice_number|tojson }}, "customer": {{ invoice.customer_text|tojson }}, "job": {{ invoice.job_text|tojson }}, "amount": {{ (invoice.amount_tax_ex|float)|tojson }}, "url": {{ (url_for('invoice_detail_page', invoice_id=invoice.id) if invoice.id else None)|tojson }}},
+            {%- endif -%}
+            {%- if invoice.removal_datetime -%}
+            {"type": "removal", "datetime": {{ invoice.removal_datetime|tojson }}, "ok": {{ invoice.removal_ok|tojson }}, "invoiceNumber": {{ invoice.invoice_number|tojson }}, "customer": {{ invoice.customer_text|tojson }}, "job": {{ invoice.job_text|tojson }}, "amount": {{ (invoice.amount_tax_ex|float)|tojson }}, "url": {{ (url_for('invoice_detail_page', invoice_id=invoice.id) if invoice.id else None)|tojson }}},
+            {%- endif -%}
+        {%- endfor -%}
+        {"type": "sentinel"}
+    ]</script>
 {% elif not error %}
     <p>No invoices found for this financial year.</p>
 {% endif %}

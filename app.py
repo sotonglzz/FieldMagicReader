@@ -7,6 +7,10 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from flask import Flask, render_template, request, redirect, url_for, jsonify
 from update_job_types import update_job_types, update_job_addresses, update_pickup_dates, PARSE_ERRORS
+from datetime_parser import parse_install_removal
+from ollama_client import parse_datetimes_with_ollama
+from timesheets import allocate_staff
+from import_timesheets import import_timesheets_if_present
 import logging
 from threading import Thread, Lock
 
@@ -35,6 +39,21 @@ password = "310b7da2d2fe630739fa6a12"
 
 # Flask Setup
 app = Flask(__name__)
+
+def format_datetime_label(value):
+    """Format an ISO datetime string for display, e.g. 'Sun 29 Jun 2025, 9:00am'."""
+    if not value:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return value
+    time_label = parsed.strftime("%I:%M%p").lstrip("0").lower()
+    return f"{parsed.strftime('%a %d %b %Y')}, {time_label}"
+
+@app.template_filter("datetime_label")
+def datetime_label_filter(value):
+    return format_datetime_label(value)
 
 # Database Initialization
 DB_NAME = "jobs_cache.db"
@@ -85,6 +104,15 @@ def init_db():
             invoice_id TEXT PRIMARY KEY,
             fetched_at TIMESTAMP,
             payload TEXT
+        )
+        """)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS invoice_datetime_cache (
+            invoice_id TEXT PRIMARY KEY,
+            install_datetime TEXT,
+            removal_datetime TEXT,
+            source TEXT,
+            fetched_at TIMESTAMP
         )
         """)
         cursor.execute("PRAGMA table_info(jobs)")
@@ -237,6 +265,63 @@ def cache_invoice_detail(invoice_id, invoice_detail, fetched_at):
         """, (invoice_id, fetched_at.isoformat(), json.dumps(invoice_detail)))
         conn.commit()
 
+def get_all_invoice_datetime_cache():
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT invoice_id, install_datetime, removal_datetime, source FROM invoice_datetime_cache"
+            )
+            rows = cursor.fetchall()
+        except sqlite3.OperationalError:
+            return {}
+
+    return {
+        row[0]: {
+            "install_datetime": row[1],
+            "removal_datetime": row[2],
+            "source": row[3],
+        }
+        for row in rows
+    }
+
+def cache_invoice_datetimes(invoice_id, install_datetime, removal_datetime, source, fetched_at):
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT OR REPLACE INTO invoice_datetime_cache (
+                invoice_id, install_datetime, removal_datetime, source, fetched_at
+            ) VALUES (?, ?, ?, ?, ?)
+        """, (invoice_id, install_datetime, removal_datetime, source, fetched_at.isoformat()))
+        conn.commit()
+
+def resolve_invoice_datetimes(invoices):
+    """Attach install/removal datetimes to each invoice.
+
+    Resolution priority: a cached ollama/manual result overrides the regex parser.
+    """
+    cache = get_all_invoice_datetime_cache()
+
+    for invoice in invoices:
+        invoice_id = invoice.get("id")
+        cached = cache.get(invoice_id) if invoice_id else None
+
+        if cached and cached.get("source") in ("ollama", "manual"):
+            invoice["install_datetime"] = cached.get("install_datetime")
+            invoice["removal_datetime"] = cached.get("removal_datetime")
+            invoice["install_ok"] = bool(cached.get("install_datetime"))
+            invoice["removal_ok"] = bool(cached.get("removal_datetime"))
+            continue
+
+        parsed = parse_install_removal(
+            invoice.get("invoice_summary"),
+            invoice.get("job_summary")
+        )
+        invoice["install_datetime"] = parsed["install"]
+        invoice["removal_datetime"] = parsed["removal"]
+        invoice["install_ok"] = parsed["install_ok"]
+        invoice["removal_ok"] = parsed["removal_ok"]
+
 def fetch_invoice_detail(invoice_id):
     response = requests.get(
         f"{CUSTOMER_INVOICES_API_URL}/{invoice_id}",
@@ -291,6 +376,13 @@ def enrich_invoices_with_line_items(invoices, force_refresh=False, progress_call
             continue
 
         invoice["line_items"] = format_invoice_line_items(invoice_detail.get("line_items") if invoice_detail else [])
+        if invoice_detail:
+            # The report list already carries invoice_summary; job_summary only
+            # exists on the detail, so capture it for the datetime parser.
+            if invoice_detail.get("job_summary"):
+                invoice["job_summary"] = invoice_detail.get("job_summary")
+            if not invoice.get("invoice_summary") and invoice_detail.get("invoice_summary"):
+                invoice["invoice_summary"] = invoice_detail.get("invoice_summary")
         if progress_callback and invoice_count:
             progress = 45 + int((index / invoice_count) * 50)
             progress_callback(
@@ -491,6 +583,17 @@ def build_report_payload(report_year, report_key, report_title, start_date, end_
         progress_callback=progress_callback
     )
 
+    if progress_callback:
+        progress_callback(96, "Resolving job install/removal datetimes")
+    resolve_invoice_datetimes(invoices)
+
+    if progress_callback:
+        progress_callback(98, "Matching staff timesheets to jobs")
+    try:
+        allocate_staff(invoices)
+    except Exception as e:
+        logging.error(f"Staff allocation failed: {e}")
+
     total_amount = sum((Decimal(invoice.get("amount_tax_ex") or "0") for invoice in invoices), Decimal("0"))
     return {
         "report_title": report_title,
@@ -635,6 +738,58 @@ def invoice_detail_page(invoice_id):
 
     return render_template("invoice_detail.html", invoice=invoice, error=error)
 
+@app.route("/invoices/<invoice_id>/parse-datetimes", methods=["POST"])
+def parse_invoice_datetimes(invoice_id):
+    try:
+        detail = get_invoice_detail(invoice_id)
+    except Exception as e:
+        logging.error(f"parse-datetimes failed to load invoice {invoice_id}: {e}")
+        return jsonify({"error": f"Unable to load invoice: {e}"}), 502
+
+    if not detail:
+        return jsonify({"error": "Invoice not found"}), 404
+
+    text = "\n\n".join(
+        part for part in (detail.get("invoice_summary"), detail.get("job_summary")) if part
+    )
+
+    try:
+        parsed = parse_datetimes_with_ollama(text)
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Ollama unavailable for invoice {invoice_id}: {e}")
+        return jsonify({"error": "AI service is unavailable. Is Ollama running?"}), 503
+    except (ValueError, json.JSONDecodeError) as e:
+        logging.error(f"Ollama returned an unreadable response for invoice {invoice_id}: {e}")
+        return jsonify({"error": "AI returned an unreadable response."}), 502
+
+    install_datetime = parsed.get("install_datetime")
+    removal_datetime = parsed.get("removal_datetime")
+    cache_invoice_datetimes(
+        invoice_id, install_datetime, removal_datetime, "ollama", datetime.now()
+    )
+
+    invoice = dict(detail)
+    invoice["install_datetime"] = install_datetime
+    invoice["removal_datetime"] = removal_datetime
+    invoice["install_ok"] = bool(install_datetime)
+    invoice["removal_ok"] = bool(removal_datetime)
+
+    try:
+        allocate_staff([invoice])
+    except Exception as e:
+        logging.error(f"Staff allocation failed for invoice {invoice_id}: {e}")
+
+    return jsonify({
+        "install_datetime": install_datetime,
+        "removal_datetime": removal_datetime,
+        "install_ok": bool(install_datetime),
+        "removal_ok": bool(removal_datetime),
+        "install_label": format_datetime_label(install_datetime),
+        "removal_label": format_datetime_label(removal_datetime),
+        "staff_allocations": invoice.get("staff_allocations", []),
+        "staff_status": invoice.get("staff_status", "no_match"),
+    })
+
 # FY25 Report Endpoint
 @app.route("/fy25-report")
 def fy25_report():
@@ -648,6 +803,8 @@ def fy26_report():
 if __name__ == "__main__":
     init_db()
     logging.info("Database initialized.")
+    imported = import_timesheets_if_present()
+    logging.info(f"Timesheet import complete ({imported} rows).")
     background_sync(overall=True)
     logging.info("Triggered initial background sync.")
     app.run(host="0.0.0.0", port=5000, debug=True)

@@ -592,6 +592,10 @@ header {
     background-color: #6f42c1;
 }
 
+.staff-allocations-table th {
+    color: #000000;
+}
+
 .staff-allocations-empty {
     color: #555;
     font-size: 14px;

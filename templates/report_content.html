@@ -211,8 +211,10 @@
                                         <tr>
                                             <th>Staff</th>
                                             <th>Event</th>
-                                            <th>Shift Span</th>
-                                            <th>Allocated Hours</th>
+                                            <th>Rostered Times</th>
+                                            <th>Timesheet Times</th>
+                                            <th>Rostered Hours</th>
+                                            <th>Paid Hours</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -220,8 +222,10 @@
                                             <tr>
                                                 <td>{{ allocation.name }}</td>
                                                 <td>{{ allocation.kind|capitalize }}</td>
-                                                <td>{{ allocation.shift_span }}</td>
-                                                <td>{{ "%.2f"|format(allocation.hours) }}</td>
+                                                <td>{{ allocation.rostered_span }}</td>
+                                                <td>{{ allocation.timesheet_span or "—" }}</td>
+                                                <td>{{ "%.2f"|format(allocation.rostered_hours) }}</td>
+                                                <td>{% if allocation.paid_hours is not none %}{{ "%.2f"|format(allocation.paid_hours) }}{% else %}—{% endif %}</td>
                                             </tr>
                                         {% endfor %}
                                     </tbody>

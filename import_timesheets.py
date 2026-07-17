@@ -27,15 +27,28 @@ def create_timesheets_table(conn):
             team_member TEXT,
             shift_start TIMESTAMP,
             shift_end TIMESTAMP,
+            timesheet_start TIMESTAMP,
+            timesheet_end TIMESTAMP,
             total_time REAL,
+            timesheet_total_time REAL,
             area TEXT,
-            location TEXT
+            location TEXT,
+            leave_policy TEXT,
+            status TEXT
         )
         """
     )
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_timesheets_shift_date ON timesheets(date(shift_start))"
     )
+    # Migrate pre-existing tables that lack the newer columns.
+    cursor.execute("PRAGMA table_info(timesheets)")
+    existing = {row[1] for row in cursor.fetchall()}
+    for column in ("leave_policy", "status", "timesheet_start", "timesheet_end"):
+        if column not in existing:
+            cursor.execute(f"ALTER TABLE timesheets ADD COLUMN {column} TEXT")
+    if "timesheet_total_time" not in existing:
+        cursor.execute("ALTER TABLE timesheets ADD COLUMN timesheet_total_time REAL")
     conn.commit()
 
 
@@ -117,6 +130,9 @@ def import_timesheets(path=TIMESHEET_JSON, db_name=DB_NAME):
             shift_end = _parse_dt(_get(norm, "Shift End Time", "Shift End")) or _parse_dt(
                 _get(norm, "Timesheet End Time", "Timesheet End")
             )
+            # Actual clock in/out, kept separate from the rostered shift window.
+            timesheet_start = _parse_dt(_get(norm, "Timesheet Start Time", "Timesheet Start"))
+            timesheet_end = _parse_dt(_get(norm, "Timesheet End Time", "Timesheet End"))
             team_member = _get(
                 norm, "Team member", "Team Member", "Employee", "Name", "User"
             )
@@ -124,11 +140,18 @@ def import_timesheets(path=TIMESHEET_JSON, db_name=DB_NAME):
                 first = _get(norm, "First name", "First Name")
                 last = _get(norm, "Last name", "Last Name")
                 team_member = " ".join(part for part in (first, last) if part) or None
+            # Rostered paid hours (shift window minus unpaid breaks).
             total_time = _parse_hours(
-                _get(norm, "Shift Total Time", "Timesheet Total Time", "Total Time", "Hours")
+                _get(norm, "Shift Total Time", "Total Time", "Hours")
+            )
+            # Actual paid hours worked (timesheet clock minus unpaid breaks).
+            timesheet_total_time = _parse_hours(
+                _get(norm, "Timesheet Total Time", "Timesheet Total")
             )
             area = _get(norm, "Timesheet area", "Area")
             location = _get(norm, "Timesheet location", "Location", "Site")
+            leave_policy = _get(norm, "Timesheet leave policy", "Leave Policy", "Leave")
+            status = _get(norm, "Timesheet Status", "Status")
 
             timesheet_id = (
                 _get(norm, "Timesheet ID", "ID")
@@ -139,10 +162,17 @@ def import_timesheets(path=TIMESHEET_JSON, db_name=DB_NAME):
                 """
                 INSERT OR REPLACE INTO timesheets (
                     timesheet_id, team_member, shift_start, shift_end,
-                    total_time, area, location
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    timesheet_start, timesheet_end,
+                    total_time, timesheet_total_time,
+                    area, location, leave_policy, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (str(timesheet_id), team_member, shift_start, shift_end, total_time, area, location),
+                (
+                    str(timesheet_id), team_member, shift_start, shift_end,
+                    timesheet_start, timesheet_end,
+                    total_time, timesheet_total_time,
+                    area, location, leave_policy, status,
+                ),
             )
             imported += 1
 

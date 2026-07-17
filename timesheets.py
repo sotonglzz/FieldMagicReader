@@ -76,7 +76,9 @@ def _load_shifts(db_name, min_date, max_date):
         try:
             cursor.execute(
                 """
-                SELECT timesheet_id, team_member, shift_start, shift_end
+                SELECT timesheet_id, team_member, shift_start, shift_end,
+                       timesheet_start, timesheet_end,
+                       total_time, timesheet_total_time
                 FROM timesheets
                 WHERE shift_start IS NOT NULL AND shift_end IS NOT NULL
                   AND date(shift_start) BETWEEN ? AND ?
@@ -94,6 +96,12 @@ def _load_shifts(db_name, min_date, max_date):
                            AND area NOT LIKE '%Maintenance%'
                            AND area NOT LIKE '%Run 01%'
                            AND area NOT LIKE '%Run01%'))
+                  -- Leave rows (Annual/Sick/Public Holiday/etc.) carry shift
+                  -- times but are not on-site at a job, so never match them.
+                  AND (leave_policy IS NULL OR leave_policy = '')
+                  -- Only finalised timesheets are real worked shifts;
+                  -- exclude drafts (On shift/Pending) and Discarded rows.
+                  AND status IN ('Pay approved', 'Paid', 'Time approved')
                 """,
                 (min_date.isoformat(), max_date.isoformat()),
             )
@@ -102,7 +110,8 @@ def _load_shifts(db_name, min_date, max_date):
             # timesheets table not created yet.
             return shifts
 
-    for timesheet_id, team_member, shift_start, shift_end in rows:
+    for (timesheet_id, team_member, shift_start, shift_end,
+         timesheet_start, timesheet_end, total_time, timesheet_total_time) in rows:
         start = _parse_dt(shift_start)
         end = _parse_dt(shift_end)
         if not start or not end or end <= start:
@@ -113,6 +122,11 @@ def _load_shifts(db_name, min_date, max_date):
                 "team_member": team_member or "Unknown",
                 "shift_start": start,
                 "shift_end": end,
+                "timesheet_start": _parse_dt(timesheet_start),
+                "timesheet_end": _parse_dt(timesheet_end),
+                # Paid totals (breaks removed): rostered vs actually worked.
+                "total_time": total_time,
+                "timesheet_total_time": timesheet_total_time,
             }
         )
     return shifts
@@ -217,6 +231,22 @@ def allocate_staff(invoices, db_name=DB_NAME):
         ordered = sorted(unique.values(), key=lambda event: event["anchor"])
         anchors = [event["anchor"] for event in ordered]
 
+        # Raw rostered span, used only to apportion the paid totals below.
+        span_hours = (shift["shift_end"] - shift["shift_start"]).total_seconds() / 3600.0
+
+        # Paid totals (breaks excluded); fall back to the raw span when absent.
+        rostered_total = shift.get("total_time")
+        if rostered_total in (None, ""):
+            rostered_total = span_hours
+        paid_total = shift.get("timesheet_total_time")
+
+        timesheet_start = shift.get("timesheet_start")
+        timesheet_end = shift.get("timesheet_end")
+        if timesheet_start and timesheet_end and timesheet_end > timesheet_start:
+            timesheet_span = _format_span(timesheet_start, timesheet_end)
+        else:
+            timesheet_span = ""
+
         for index, event in enumerate(ordered):
             segment_start = shift["shift_start"] if index == 0 else event["anchor"]
             segment_end = anchors[index + 1] if index + 1 < len(ordered) else shift["shift_end"]
@@ -224,13 +254,21 @@ def allocate_staff(invoices, db_name=DB_NAME):
             if hours <= 0:
                 continue
 
+            # Apportion the shift's paid totals by this segment's share of the
+            # rostered span, so multi-job shifts split proportionally.
+            fraction = hours / span_hours if span_hours > 0 else 0
+            rostered_hours = round(rostered_total * fraction, 2)
+            paid_hours = round(paid_total * fraction, 2) if paid_total not in (None, "") else None
+
             invoice = invoice_by_id[event["invoice_id"]]
             invoice["staff_allocations"].append(
                 {
                     "name": shift["team_member"],
                     "kind": event["kind"],
-                    "shift_span": _format_span(shift["shift_start"], shift["shift_end"]),
-                    "hours": round(hours, 2),
+                    "rostered_span": _format_span(shift["shift_start"], shift["shift_end"]),
+                    "timesheet_span": timesheet_span,
+                    "rostered_hours": rostered_hours,
+                    "paid_hours": paid_hours,
                 }
             )
             invoice["staff_status"] = "matched"

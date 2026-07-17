@@ -1778,8 +1778,10 @@ function renderStaffRow(staffRow, data) {
         <tr>
             <td>${escapeReportHtml(allocation.name)}</td>
             <td>${escapeReportHtml(capitalizeWord(allocation.kind))}</td>
-            <td>${escapeReportHtml(allocation.shift_span)}</td>
-            <td>${Number(allocation.hours || 0).toFixed(2)}</td>
+            <td>${escapeReportHtml(allocation.rostered_span)}</td>
+            <td>${escapeReportHtml(allocation.timesheet_span) || "—"}</td>
+            <td>${Number(allocation.rostered_hours || 0).toFixed(2)}</td>
+            <td>${allocation.paid_hours != null ? Number(allocation.paid_hours).toFixed(2) : "—"}</td>
         </tr>
     `).join("");
 
@@ -1789,8 +1791,10 @@ function renderStaffRow(staffRow, data) {
                 <tr>
                     <th>Staff</th>
                     <th>Event</th>
-                    <th>Shift Span</th>
-                    <th>Allocated Hours</th>
+                    <th>Rostered Times</th>
+                    <th>Timesheet Times</th>
+                    <th>Rostered Hours</th>
+                    <th>Paid Hours</th>
                 </tr>
             </thead>
             <tbody>${rows}</tbody>

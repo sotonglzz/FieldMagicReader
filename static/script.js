@@ -46,6 +46,8 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
     }
 
+    setupCostPerManHourModifier();
+
     const params = new URLSearchParams({
         year: document.body.dataset.reportYear || "fy26",
         include_voided: document.body.dataset.includeVoided || "0",
@@ -1762,6 +1764,25 @@ function setDatetimeCell(cell, value, ok, invoiceId) {
     cell.appendChild(button);
 }
 
+function matchSourceBadgeHtml(matchSource) {
+    if (matchSource === "time+roster") {
+        return `<span class="match-source-badge match-source-roster" title="Time-matched and confirmed against the Excel roster">Time + Roster</span>`;
+    }
+    return `<span class="match-source-badge match-source-time" title="Matched by timesheet time window only">Time</span>`;
+}
+
+function invoiceMatchBadgesHtml(allocations) {
+    const sources = new Set((allocations || []).map((a) => a.match_source || "time"));
+    const parts = [];
+    if (sources.has("time+roster")) {
+        parts.push(matchSourceBadgeHtml("time+roster"));
+    }
+    if (sources.has("time")) {
+        parts.push(matchSourceBadgeHtml("time"));
+    }
+    return parts.length ? `<span class="match-source-badges">${parts.join("")}</span>` : "";
+}
+
 function renderStaffRow(staffRow, data) {
     const cell = staffRow?.querySelector("td");
     if (!cell) {
@@ -1778,6 +1799,7 @@ function renderStaffRow(staffRow, data) {
         <tr>
             <td>${escapeReportHtml(allocation.name)}</td>
             <td>${escapeReportHtml(capitalizeWord(allocation.kind))}</td>
+            <td>${matchSourceBadgeHtml(allocation.match_source)}</td>
             <td>${escapeReportHtml(allocation.rostered_span)}</td>
             <td>${escapeReportHtml(allocation.timesheet_span) || "—"}</td>
             <td>${Number(allocation.rostered_hours || 0).toFixed(2)}</td>
@@ -1791,6 +1813,7 @@ function renderStaffRow(staffRow, data) {
                 <tr>
                     <th>Staff</th>
                     <th>Event</th>
+                    <th>Match</th>
                     <th>Rostered Times</th>
                     <th>Timesheet Times</th>
                     <th>Rostered Hours</th>
@@ -1802,6 +1825,89 @@ function renderStaffRow(staffRow, data) {
     `;
 }
 
+const DEFAULT_COST_PER_MAN_HOUR = 50;
+const COST_PER_MAN_HOUR_STORAGE_KEY = "report-cost-per-man-hour";
+
+function setStaffRosterToggleLabel(toggle, staffCount) {
+    const label = toggle?.querySelector(".staff-roster-toggle-label");
+    if (!label) {
+        return;
+    }
+    label.textContent = staffCount > 0 ? `Staff (${staffCount})` : "Staff";
+}
+
+function setStaffRosterExpanded(invoiceRow, staffRow, toggle, expanded) {
+    if (staffRow) {
+        staffRow.hidden = !expanded;
+    }
+    if (toggle) {
+        toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+    }
+    if (invoiceRow) {
+        invoiceRow.classList.toggle("is-staff-expanded", expanded);
+    }
+}
+
+function getCostPerManHour() {
+    const input = document.getElementById("cost-per-man-hour");
+    const raw = input?.value?.trim();
+    if (raw === "" || raw == null) {
+        return DEFAULT_COST_PER_MAN_HOUR;
+    }
+    const value = Number(raw);
+    return Number.isFinite(value) && value >= 0 ? value : DEFAULT_COST_PER_MAN_HOUR;
+}
+
+function sumPaidHours(allocations) {
+    return (allocations || []).reduce((total, allocation) => {
+        const paidHours = allocation?.paid_hours;
+        if (paidHours == null || paidHours === "") {
+            return total;
+        }
+        const value = Number(paidHours);
+        return Number.isFinite(value) ? total + value : total;
+    }, 0);
+}
+
+function formatCurrencyAmount(amount) {
+    return `$${Number(amount).toFixed(2)}`;
+}
+
+function updateInvoiceLabourCostCells(invoiceRow, rate = getCostPerManHour()) {
+    if (!invoiceRow) {
+        return;
+    }
+
+    const paidHours = Number(invoiceRow.dataset.paidHours || 0);
+    const amountEx = Number(invoiceRow.dataset.amountEx || 0);
+    const labourCost = (Number.isFinite(paidHours) ? paidHours : 0) * rate;
+    const labourCostCell = invoiceRow.querySelector(".labour-cost-cell");
+    const labourCostPctCell = invoiceRow.querySelector(".labour-cost-pct-cell");
+
+    if (labourCostCell) {
+        labourCostCell.textContent = formatCurrencyAmount(labourCost);
+        labourCostCell.dataset.sortValue = String(labourCost);
+    }
+
+    if (labourCostPctCell) {
+        if (!Number.isFinite(amountEx) || amountEx === 0) {
+            labourCostPctCell.textContent = "—";
+            labourCostPctCell.dataset.sortValue = "";
+        } else {
+            const pct = (labourCost / amountEx) * 100;
+            labourCostPctCell.textContent = `${pct.toFixed(1)}%`;
+            labourCostPctCell.dataset.sortValue = String(pct);
+        }
+    }
+}
+
+function refreshLabourCostColumns(container = document) {
+    const rate = getCostPerManHour();
+    container.querySelectorAll("tr.profitability-invoice-row").forEach((row) => {
+        updateInvoiceLabourCostCells(row, rate);
+    });
+}
+
 function applyDatetimeResult(container, invoiceId, data) {
     const selector = `[data-invoice-id="${invoiceId}"]`;
     const invoiceRow = container.querySelector(`tr.profitability-invoice-row${selector}`);
@@ -1810,6 +1916,21 @@ function applyDatetimeResult(container, invoiceId, data) {
     if (invoiceRow) {
         setDatetimeCell(invoiceRow.querySelector(".datetime-install"), data.install_datetime, data.install_ok, invoiceId);
         setDatetimeCell(invoiceRow.querySelector(".datetime-removal"), data.removal_datetime, data.removal_ok, invoiceId);
+        const numberCell = invoiceRow.querySelector("td");
+        if (numberCell) {
+            const existing = numberCell.querySelector(".match-source-badges");
+            if (existing) {
+                existing.remove();
+            }
+            const badges = invoiceMatchBadgesHtml(data.staff_allocations || []);
+            if (badges) {
+                numberCell.insertAdjacentHTML("beforeend", ` ${badges}`);
+            }
+            const toggle = numberCell.querySelector(".staff-roster-toggle");
+            setStaffRosterToggleLabel(toggle, (data.staff_allocations || []).length);
+        }
+        invoiceRow.dataset.paidHours = String(sumPaidHours(data.staff_allocations || []));
+        updateInvoiceLabourCostCells(invoiceRow);
     }
 
     if (staffRow) {
@@ -1866,6 +1987,41 @@ function setupAiParseQueue(container) {
     });
 }
 
+function setupCostPerManHourModifier() {
+    const input = document.getElementById("cost-per-man-hour");
+    if (!input) {
+        return;
+    }
+
+    const saved = localStorage.getItem(COST_PER_MAN_HOUR_STORAGE_KEY);
+    if (saved != null && saved !== "") {
+        input.value = saved;
+    } else {
+        input.value = String(DEFAULT_COST_PER_MAN_HOUR);
+    }
+
+    const persistAndRefresh = () => {
+        const value = input.value.trim();
+        if (value === "") {
+            input.value = String(DEFAULT_COST_PER_MAN_HOUR);
+            localStorage.setItem(COST_PER_MAN_HOUR_STORAGE_KEY, input.value);
+        } else {
+            localStorage.setItem(COST_PER_MAN_HOUR_STORAGE_KEY, value);
+        }
+        refreshLabourCostColumns();
+    };
+
+    input.addEventListener("input", () => refreshLabourCostColumns());
+    input.addEventListener("change", persistAndRefresh);
+    input.addEventListener("blur", persistAndRefresh);
+    input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+            event.preventDefault();
+            input.blur();
+        }
+    });
+}
+
 function setupJobProfitabilityView() {
     const button = document.getElementById("job-profitability-view-button");
     const view = document.getElementById("job-profitability-view");
@@ -1878,6 +2034,25 @@ function setupJobProfitabilityView() {
         showReportView(view.hidden ? "profitability" : "invoice");
     });
 
+    view.addEventListener("click", (event) => {
+        const toggle = event.target.closest(".staff-roster-toggle");
+        if (!toggle || !view.contains(toggle)) {
+            return;
+        }
+
+        const invoiceId = toggle.dataset.invoiceId;
+        if (!invoiceId) {
+            return;
+        }
+
+        const selector = `[data-invoice-id="${invoiceId}"]`;
+        const invoiceRow = view.querySelector(`tr.profitability-invoice-row${selector}`);
+        const staffRow = view.querySelector(`tr.profitability-staff-row${selector}`);
+        const expanded = toggle.getAttribute("aria-expanded") !== "true";
+        setStaffRosterExpanded(invoiceRow, staffRow, toggle, expanded);
+    });
+
+    refreshLabourCostColumns(view);
     setupAiParseQueue(view);
 }
 

@@ -16,30 +16,163 @@
         <h1>Admin Portal</h1>
     </header>
     <main>
-        <h2>Parsing Errors</h2>
-        {% if parse_errors %}
-            <table>
-                <thead>
-                    <tr>
-                        <th>Job Number</th>
-                        <th>Job Summary</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for error in parse_errors %}
+        <section class="admin-section">
+            <h2>Roster nickname aliases</h2>
+            <p class="admin-help">
+                Map Excel schedule nicknames (e.g. <code>Matho</code>, <code>Jag</code>) to
+                timesheet employee names. These aliases are used only to
+                <strong>filter</strong> time-based job matches — blank mappings fall back to
+                first-name matching, and jobs with no roster staff keep time-only matching.
+            </p>
+            <p class="admin-roster-meta">
+                {% if roster_load_error %}
+                    <span class="admin-status-error">{{ roster_load_error }}</span>
+                {% elif roster_source %}
+                    Roster: <code>{{ roster_source }}</code>
+                    &mdash; {{ roster_entry_count }} job rows,
+                    {{ roster_nickname_count }} nicknames,
+                    {{ alias_count }} mapped.
+                {% else %}
+                    No <code>Schedule*.xlsx</code> found in the project folder.
+                    Drop the schedule workbook into the app directory and reload.
+                {% endif %}
+            </p>
+            <div class="admin-roster-actions">
+                <button type="button" id="roster-reload-button" class="report-view-button">Reload roster Excel</button>
+                <span id="roster-reload-status" class="admin-status" aria-live="polite"></span>
+            </div>
+
+            {% if nickname_rows %}
+            <form id="roster-aliases-form" method="post" action="{{ url_for('admin_save_roster_aliases') }}">
+                <div class="admin-alias-toolbar">
+                    <button type="submit" class="report-view-button">Save aliases</button>
+                    <span id="roster-save-status" class="admin-status" aria-live="polite"></span>
+                </div>
+                <table class="admin-alias-table">
+                    <thead>
                         <tr>
-                            <td>{{ error.job_number }}</td>
-                            <td>{{ error.job_summary }}</td>
+                            <th>Excel nickname</th>
+                            <th>Timesheet employee</th>
                         </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        {% else %}
-            <p>No errors found.</p>
-        {% endif %}
+                    </thead>
+                    <tbody>
+                        {% for row in nickname_rows %}
+                        <tr>
+                            <td><code>{{ row.nickname }}</code></td>
+                            <td>
+                                <select name="alias:{{ row.nickname }}" class="admin-alias-select">
+                                    <option value="">— unmapped —</option>
+                                    {% for emp in employees %}
+                                    <option value="{{ emp }}"
+                                        {% if row.mapped == emp %}selected
+                                        {% elif not row.mapped and row.suggested == emp %}selected
+                                        {% endif %}>
+                                        {{ emp }}{% if not row.mapped and row.suggested == emp %} (suggested){% endif %}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                <div class="admin-alias-toolbar">
+                    <button type="submit" class="report-view-button">Save aliases</button>
+                </div>
+            </form>
+            {% else %}
+                <p>No Excel nicknames to map yet.</p>
+            {% endif %}
+        </section>
+
+        <section class="admin-section">
+            <h2>Parsing Errors</h2>
+            {% if parse_errors %}
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Job Number</th>
+                            <th>Job Summary</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for error in parse_errors %}
+                            <tr>
+                                <td>{{ error.job_number }}</td>
+                                <td>{{ error.job_summary }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                <p>No errors found.</p>
+            {% endif %}
+        </section>
     </main>
     <footer>
         <p>Powered by Flask and SQLite</p>
     </footer>
+    <script>
+    (function () {
+        const reloadBtn = document.getElementById("roster-reload-button");
+        const reloadStatus = document.getElementById("roster-reload-status");
+        if (reloadBtn) {
+            reloadBtn.addEventListener("click", async () => {
+                reloadBtn.disabled = true;
+                reloadStatus.textContent = "Reloading…";
+                try {
+                    const res = await fetch("{{ url_for('admin_reload_roster') }}", { method: "POST" });
+                    let data = {};
+                    try {
+                        data = await res.json();
+                    } catch (_) {
+                        throw new Error(`Reload failed (HTTP ${res.status})`);
+                    }
+                    if (!res.ok || data.ok === false) {
+                        throw new Error(data.error || "Reload failed");
+                    }
+                    reloadStatus.textContent = `Loaded ${data.entry_count} rows / ${data.nickname_count} nicknames. Refreshing…`;
+                    window.location.reload();
+                } catch (err) {
+                    reloadStatus.textContent = err.message || "Reload failed";
+                    reloadBtn.disabled = false;
+                }
+            });
+        }
+
+        const form = document.getElementById("roster-aliases-form");
+        const saveStatus = document.getElementById("roster-save-status");
+        if (form) {
+            form.addEventListener("submit", async (event) => {
+                event.preventDefault();
+                const aliases = {};
+                form.querySelectorAll("select.admin-alias-select").forEach((select) => {
+                    const nick = select.name.slice("alias:".length);
+                    if (select.value) {
+                        aliases[nick] = select.value;
+                    }
+                });
+                if (saveStatus) saveStatus.textContent = "Saving…";
+                try {
+                    const res = await fetch(form.action, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "Accept": "application/json",
+                        },
+                        body: JSON.stringify({ aliases }),
+                    });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.error || "Save failed");
+                    if (saveStatus) {
+                        saveStatus.textContent = `Saved ${data.alias_count} aliases. Reload a report to apply.`;
+                    }
+                } catch (err) {
+                    if (saveStatus) saveStatus.textContent = err.message || "Save failed";
+                }
+            });
+        }
+    })();
+    </script>
 </body>
 </html>

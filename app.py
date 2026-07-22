@@ -9,8 +9,17 @@ from flask import Flask, render_template, request, redirect, url_for, jsonify
 from update_job_types import update_job_types, update_job_addresses, update_pickup_dates, PARSE_ERRORS
 from datetime_parser import parse_install_removal
 from ollama_client import parse_datetimes_with_ollama
-from timesheets import allocate_staff
+from timesheets import allocate_staff, summarise_rostered_vs_paid
 from import_timesheets import import_timesheets_if_present
+from roster import (
+    get_aliases,
+    get_roster,
+    list_timesheet_employees,
+    refresh_aliases,
+    refresh_roster,
+    suggest_employee,
+    update_aliases,
+)
 import logging
 from threading import Thread, Lock
 
@@ -550,7 +559,94 @@ def sync_status_endpoint():
 # Admin Portal Endpoint
 @app.route("/admin")
 def admin_portal():
-    return render_template("admin.html", parse_errors=PARSE_ERRORS)
+    roster = get_roster()
+    aliases = get_aliases()
+    employees = list_timesheet_employees()
+    employee_set = set(employees)
+    nicknames = sorted(roster.nicknames, key=lambda n: n.lower())
+    nickname_rows = []
+    for nick in nicknames:
+        mapped = aliases.get(nick) or ""
+        # Case-insensitive recover if the saved key casing drifted.
+        if not mapped:
+            for key, value in aliases.items():
+                if key.lower() == nick.lower():
+                    mapped = value
+                    break
+        suggested = suggest_employee(nick, employee_set) or ""
+        nickname_rows.append(
+            {
+                "nickname": nick,
+                "mapped": mapped if mapped in employee_set else "",
+                "suggested": suggested,
+            }
+        )
+    return render_template(
+        "admin.html",
+        parse_errors=PARSE_ERRORS,
+        nickname_rows=nickname_rows,
+        employees=employees,
+        roster_source=roster.source_path,
+        roster_entry_count=roster.entry_count,
+        roster_nickname_count=len(roster.nicknames),
+        roster_load_error=roster.load_error,
+        alias_count=sum(1 for row in nickname_rows if row["mapped"]),
+    )
+
+
+@app.route("/admin/roster-aliases", methods=["POST"])
+def admin_save_roster_aliases():
+    payload = request.get_json(silent=True)
+    if payload is None:
+        # Form post: nickname_<token> fields
+        aliases = {}
+        for key, value in request.form.items():
+            if not key.startswith("alias:"):
+                continue
+            nick = key[len("alias:"):].strip()
+            name = (value or "").strip()
+            if nick and name:
+                aliases[nick] = name
+    else:
+        aliases = payload.get("aliases") if isinstance(payload, dict) else None
+        if not isinstance(aliases, dict):
+            return jsonify({"error": "Expected JSON body with an 'aliases' object."}), 400
+        aliases = {
+            str(k).strip(): str(v).strip()
+            for k, v in aliases.items()
+            if str(k).strip() and str(v).strip()
+        }
+
+    saved = update_aliases(aliases)
+    logging.info("Saved %d roster nickname aliases.", len(saved))
+    if request.accept_mimetypes.best == "application/json" or payload is not None:
+        return jsonify({"ok": True, "alias_count": len(saved), "aliases": saved})
+    return redirect(url_for("admin_portal"))
+
+
+@app.route("/admin/roster-reload", methods=["POST"])
+def admin_reload_roster():
+    roster = refresh_roster()
+    refresh_aliases()
+    if roster.load_error or not roster.entry_count:
+        return jsonify(
+            {
+                "ok": False,
+                "error": roster.load_error
+                or "Roster file loaded but no job/staff rows were found.",
+                "source_path": roster.source_path,
+                "entry_count": roster.entry_count,
+                "nickname_count": len(roster.nicknames),
+            }
+        ), 400
+    return jsonify(
+        {
+            "ok": True,
+            "source_path": roster.source_path,
+            "entry_count": roster.entry_count,
+            "nickname_count": len(roster.nicknames),
+        }
+    )
 
 def update_report_job(job_id, **updates):
     with report_jobs_lock:
@@ -594,6 +690,8 @@ def build_report_payload(report_year, report_key, report_title, start_date, end_
     except Exception as e:
         logging.error(f"Staff allocation failed: {e}")
 
+    roster_vs_paid = summarise_rostered_vs_paid(start_date, end_date)
+
     total_amount = sum((Decimal(invoice.get("amount_tax_ex") or "0") for invoice in invoices), Decimal("0"))
     return {
         "report_title": report_title,
@@ -606,6 +704,7 @@ def build_report_payload(report_year, report_key, report_title, start_date, end_
         "voided_count": voided_count,
         "total_amount": f"{total_amount:,.2f}",
         "fetched_at": fetched_at.strftime("%Y-%m-%d %H:%M:%S") if fetched_at else None,
+        "roster_vs_paid": roster_vs_paid,
         "error": error
     }
 
@@ -788,6 +887,7 @@ def parse_invoice_datetimes(invoice_id):
         "removal_label": format_datetime_label(removal_datetime),
         "staff_allocations": invoice.get("staff_allocations", []),
         "staff_status": invoice.get("staff_status", "no_match"),
+        "paid_hours_total": invoice.get("paid_hours_total", 0.0),
     })
 
 # FY25 Report Endpoint
@@ -805,6 +905,21 @@ if __name__ == "__main__":
     logging.info("Database initialized.")
     imported = import_timesheets_if_present()
     logging.info(f"Timesheet import complete ({imported} rows).")
+    # Warm the roster cache in a background thread so the server starts quickly
+    # (parsing the full Schedule workbook takes ~1 minute).
+    def _warm_roster():
+        try:
+            roster = refresh_roster()
+            refresh_aliases()
+            logging.info(
+                "Roster loaded (%s entries from %s).",
+                roster.entry_count,
+                roster.source_path or "none",
+            )
+        except Exception as exc:
+            logging.warning("Roster warm-up failed: %s", exc)
+
+    Thread(target=_warm_roster, daemon=True).start()
     background_sync(overall=True)
     logging.info("Triggered initial background sync.")
     app.run(host="0.0.0.0", port=5000, debug=True)

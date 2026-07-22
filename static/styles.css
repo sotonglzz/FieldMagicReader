@@ -72,6 +72,22 @@ main {
     width: auto;
 }
 
+.report-modifier-form .modifier-input-label {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.report-modifier-form input[type="number"] {
+    border: 1px solid #c5d0de;
+    border-radius: 4px;
+    box-sizing: border-box;
+    font-family: Arial, sans-serif;
+    font-size: 14px;
+    padding: 6px 8px;
+    width: 100%;
+}
+
 /* Table Styles */
 table {
     width: 100%; /* Allow table to take full width */
@@ -566,6 +582,23 @@ header {
     white-space: nowrap;
 }
 
+.roster-vs-paid-summary {
+    background-color: #f8fbff;
+    border: 1px solid #cfe3ff;
+    border-radius: 6px;
+    font-family: Arial, sans-serif;
+    margin: 0 0 16px;
+    padding: 12px 16px;
+}
+
+.roster-vs-paid-summary p {
+    margin: 0;
+}
+
+.roster-vs-paid-summary p + p {
+    margin-top: 6px;
+}
+
 .datetime-partial {
     color: #7a5c00;
     display: inline-block;
@@ -601,6 +634,121 @@ header {
     font-size: 14px;
     font-style: italic;
     margin: 8px 0 0;
+}
+
+.staff-roster-toggle {
+    align-items: center;
+    background-color: #eef2f7;
+    border: 1px solid #c5d0de;
+    border-radius: 4px;
+    color: #274472;
+    cursor: pointer;
+    display: inline-flex;
+    font-family: Arial, sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    gap: 4px;
+    line-height: 1.2;
+    margin-right: 8px;
+    padding: 3px 8px 3px 6px;
+    vertical-align: middle;
+}
+
+.staff-roster-toggle:hover {
+    background-color: #e0e8f2;
+    border-color: #9eb0c7;
+}
+
+.staff-roster-chevron {
+    display: inline-block;
+    font-size: 10px;
+    line-height: 1;
+    transition: transform 0.12s ease;
+    width: 10px;
+}
+
+.staff-roster-chevron::before {
+    content: "▸";
+}
+
+.staff-roster-toggle[aria-expanded="true"] .staff-roster-chevron {
+    transform: rotate(90deg);
+}
+
+.profitability-invoice-row.is-staff-expanded {
+    background-color: #eef6ff;
+}
+
+.match-source-badges {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-left: 6px;
+    vertical-align: middle;
+}
+
+.match-source-badge {
+    border-radius: 4px;
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    line-height: 1.2;
+    padding: 3px 7px;
+    white-space: nowrap;
+}
+
+.match-source-time {
+    background-color: #e8eef7;
+    color: #274472;
+}
+
+.match-source-roster {
+    background-color: #e5f6ec;
+    color: #1b6b3a;
+}
+
+.admin-section {
+    margin-bottom: 40px;
+}
+
+.admin-help {
+    color: #444;
+    max-width: 820px;
+}
+
+.admin-roster-meta {
+    color: #333;
+    font-size: 14px;
+}
+
+.admin-roster-actions,
+.admin-alias-toolbar {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin: 12px 0;
+}
+
+.admin-status {
+    color: #555;
+    font-size: 13px;
+}
+
+.admin-status-error {
+    color: #a12622;
+    font-weight: 600;
+}
+
+.admin-alias-table {
+    width: 100%;
+}
+
+.admin-alias-table select.admin-alias-select {
+    max-width: 100%;
+    min-width: 240px;
+    padding: 6px 8px;
 }
 
 .invoice-detail-summary {

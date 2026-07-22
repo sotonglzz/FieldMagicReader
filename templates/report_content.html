@@ -166,6 +166,22 @@
     </div>
 
     <div id="job-profitability-view" hidden>
+        {% if roster_vs_paid and roster_vs_paid.shift_count %}
+        <div class="roster-vs-paid-summary">
+            <p>
+                Rostered vs paid hours
+                <span class="explain-tooltip" tabindex="0" title="Across filtered rentals timesheets in this period (Braeside/Office, sales/admin/maintenance/run areas, and leave rows excluded). Rostered is total_time; paid is timesheet_total_time.">?</span>
+            </p>
+            <p>
+                <strong>{{ "{:,.2f}".format(roster_vs_paid.rostered_hours) }}</strong> rostered
+                vs
+                <strong>{{ "{:,.2f}".format(roster_vs_paid.paid_hours) }}</strong> paid
+                across {{ "{:,}".format(roster_vs_paid.shift_count) }} shifts
+                ({{ "%+.1f"|format(roster_vs_paid.diff_pct_of_paid) }}% of paid,
+                {{ "%+.2f"|format(roster_vs_paid.diff_hours) }} h).
+            </p>
+        </div>
+        {% endif %}
         <table class="report-profitability-table sortable-report-table">
             <thead>
                 <tr>
@@ -174,18 +190,50 @@
                     <th data-sort-type="string">Customer</th>
                     <th data-sort-type="string">Job</th>
                     <th data-sort-type="number">Amount Ex Tax</th>
+                    <th data-sort-type="number">Labour Cost</th>
+                    <th data-sort-type="number">Labour cost %</th>
                     <th data-sort-type="date">Job Install Datetime</th>
                     <th data-sort-type="date">Job Removal Datetime</th>
                 </tr>
             </thead>
             <tbody>
                 {% for invoice in invoices %}
-                    <tr class="profitability-invoice-row" data-invoice-id="{{ invoice.id }}">
-                        <td>{{ invoice.invoice_number }}</td>
+                    <tr
+                        class="profitability-invoice-row"
+                        data-invoice-id="{{ invoice.id }}"
+                        data-paid-hours="{{ invoice.paid_hours_total|default(0)|float }}"
+                        data-amount-ex="{{ invoice.amount_tax_ex|float }}"
+                    >
+                        <td>
+                            <button
+                                type="button"
+                                class="staff-roster-toggle"
+                                aria-expanded="false"
+                                data-invoice-id="{{ invoice.id }}"
+                                title="Show or hide staff roster"
+                            >
+                                <span class="staff-roster-chevron" aria-hidden="true"></span>
+                                {% set staff_count = (invoice.staff_allocations|length) if invoice.staff_allocations else 0 %}
+                                <span class="staff-roster-toggle-label">{% if staff_count %}Staff ({{ staff_count }}){% else %}Staff{% endif %}</span>
+                            </button>
+                            {{ invoice.invoice_number }}
+                            {% if invoice.staff_allocations %}
+                                <span class="match-source-badges">
+                                    {% if "time+roster" in (invoice.staff_match_sources or []) %}
+                                        <span class="match-source-badge match-source-roster" title="Time-matched and confirmed against the Excel roster">Time + Roster</span>
+                                    {% endif %}
+                                    {% if "time" in (invoice.staff_match_sources or []) %}
+                                        <span class="match-source-badge match-source-time" title="Matched by timesheet time window only (no Excel roster filter)">Time</span>
+                                    {% endif %}
+                                </span>
+                            {% endif %}
+                        </td>
                         <td data-sort-value="{{ invoice.date_invoice[:10] if invoice.date_invoice else "" }}">{{ invoice.date_invoice[:10] if invoice.date_invoice else "" }}</td>
                         <td>{{ invoice.customer_text }}</td>
                         <td>{{ invoice.job_text }}</td>
                         <td data-sort-value="{{ invoice.amount_tax_ex|float }}">${{ "%.2f"|format(invoice.amount_tax_ex|float) }}</td>
+                        <td class="labour-cost-cell" data-sort-value="0">—</td>
+                        <td class="labour-cost-pct-cell" data-sort-value="0">—</td>
                         <td class="datetime-cell datetime-install" data-sort-value="{{ invoice.install_datetime or "" }}">
                             {% if invoice.install_ok %}
                                 {{ invoice.install_datetime|datetime_label }}
@@ -203,14 +251,15 @@
                             {% endif %}
                         </td>
                     </tr>
-                    <tr class="invoice-line-items-row profitability-staff-row" data-invoice-id="{{ invoice.id }}">
-                        <td colspan="7">
+                    <tr class="invoice-line-items-row profitability-staff-row" data-invoice-id="{{ invoice.id }}" hidden>
+                        <td colspan="9">
                             {% if invoice.staff_allocations %}
                                 <table class="invoice-line-items-table staff-allocations-table">
                                     <thead>
                                         <tr>
                                             <th>Staff</th>
                                             <th>Event</th>
+                                            <th>Match</th>
                                             <th>Rostered Times</th>
                                             <th>Timesheet Times</th>
                                             <th>Rostered Hours</th>
@@ -222,6 +271,13 @@
                                             <tr>
                                                 <td>{{ allocation.name }}</td>
                                                 <td>{{ allocation.kind|capitalize }}</td>
+                                                <td>
+                                                    {% if allocation.match_source == "time+roster" %}
+                                                        <span class="match-source-badge match-source-roster" title="Time-matched and confirmed against the Excel roster">Time + Roster</span>
+                                                    {% else %}
+                                                        <span class="match-source-badge match-source-time" title="Matched by timesheet time window only">Time</span>
+                                                    {% endif %}
+                                                </td>
                                                 <td>{{ allocation.rostered_span }}</td>
                                                 <td>{{ allocation.timesheet_span or "—" }}</td>
                                                 <td>{{ "%.2f"|format(allocation.rostered_hours) }}</td>

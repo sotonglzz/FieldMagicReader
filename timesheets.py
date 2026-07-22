@@ -8,6 +8,10 @@ The timesheet export has no job key, so a shift is matched to a job event
 * Absorbed match: a job with no dedicated shift whose anchor falls inside a
   running shift is absorbed by that shift.
 
+When the Excel roster has staff listed for a job, those nicknames (resolved via
+admin aliases) are used only as a FILTER on the time-based candidates — never as
+a source of new matches. Missing/blank roster rows leave time matching alone.
+
 Each shift is then segmented across the sorted anchors it is responsible for:
 the first job owns from shift start to the next anchor; every later job owns from
 its own anchor to the next anchor (or shift end for the last one).
@@ -22,6 +26,7 @@ from datetime import timedelta
 from dateutil import parser as date_parser
 
 from datetime_parser import is_diy_pickup
+from roster import build_allowed_names, get_aliases, get_roster, list_timesheet_employees
 
 logger = logging.getLogger(__name__)
 
@@ -69,39 +74,46 @@ def _format_span(start, end):
     )
 
 
+# Shared filter for "real" on-site rentals shifts (also used by the
+# rostered-vs-paid summary on the report profitability view).
+_SHIFT_FILTER_SQL = """
+    shift_start IS NOT NULL AND shift_end IS NOT NULL
+    AND date(shift_start) BETWEEN ? AND ?
+    -- Only rentals shifts do on-site installs/removals; the
+    -- Braeside (sales) and Office locations never attend jobs.
+    AND (location IS NULL
+         OR (location NOT LIKE '%Braeside%'
+             AND location NOT LIKE '%Office%'))
+    -- Drop non-job areas: sales desk/design/sandbagging/RDO,
+    -- administration/office, maintenance, and delivery-run
+    -- templates (Dlt - RUN 01). Blank areas are kept.
+    AND (area IS NULL
+         OR (area NOT LIKE '%Sales%'
+             AND area NOT LIKE '%Admin%'
+             AND area NOT LIKE '%Maintenance%'
+             AND area NOT LIKE '%Run 01%'
+             AND area NOT LIKE '%Run01%'))
+    -- Leave rows (Annual/Sick/Public Holiday/etc.) carry shift
+    -- times but are not on-site at a job, so never match them.
+    AND (leave_policy IS NULL OR leave_policy = '')
+    -- Only finalised timesheets are real worked shifts;
+    -- exclude drafts (On shift/Pending) and Discarded rows.
+    AND status IN ('Pay approved', 'Paid', 'Time approved')
+"""
+
+
 def _load_shifts(db_name, min_date, max_date):
     shifts = []
     with sqlite3.connect(db_name) as conn:
         cursor = conn.cursor()
         try:
             cursor.execute(
-                """
+                f"""
                 SELECT timesheet_id, team_member, shift_start, shift_end,
                        timesheet_start, timesheet_end,
                        total_time, timesheet_total_time
                 FROM timesheets
-                WHERE shift_start IS NOT NULL AND shift_end IS NOT NULL
-                  AND date(shift_start) BETWEEN ? AND ?
-                  -- Only rentals shifts do on-site installs/removals; the
-                  -- Braeside (sales) and Office locations never attend jobs.
-                  AND (location IS NULL
-                       OR (location NOT LIKE '%Braeside%'
-                           AND location NOT LIKE '%Office%'))
-                  -- Drop non-job areas: sales desk/design/sandbagging/RDO,
-                  -- administration/office, maintenance, and delivery-run
-                  -- templates (Dlt - RUN 01). Blank areas are kept.
-                  AND (area IS NULL
-                       OR (area NOT LIKE '%Sales%'
-                           AND area NOT LIKE '%Admin%'
-                           AND area NOT LIKE '%Maintenance%'
-                           AND area NOT LIKE '%Run 01%'
-                           AND area NOT LIKE '%Run01%'))
-                  -- Leave rows (Annual/Sick/Public Holiday/etc.) carry shift
-                  -- times but are not on-site at a job, so never match them.
-                  AND (leave_policy IS NULL OR leave_policy = '')
-                  -- Only finalised timesheets are real worked shifts;
-                  -- exclude drafts (On shift/Pending) and Discarded rows.
-                  AND status IN ('Pay approved', 'Paid', 'Time approved')
+                WHERE {_SHIFT_FILTER_SQL}
                 """,
                 (min_date.isoformat(), max_date.isoformat()),
             )
@@ -132,6 +144,57 @@ def _load_shifts(db_name, min_date, max_date):
     return shifts
 
 
+def summarise_rostered_vs_paid(min_date, max_date, db_name=DB_NAME):
+    """Compare rostered ``total_time`` vs paid ``timesheet_total_time``.
+
+    Uses the same Braeside/leave/area/status filters as ``_load_shifts``.
+    Returns totals only for shifts that have both values present.
+    """
+    empty = {
+        "shift_count": 0,
+        "rostered_hours": 0.0,
+        "paid_hours": 0.0,
+        "diff_hours": 0.0,
+        "diff_pct_of_paid": 0.0,
+    }
+    try:
+        with sqlite3.connect(db_name) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT total_time, timesheet_total_time
+                FROM timesheets
+                WHERE {_SHIFT_FILTER_SQL}
+                """,
+                (min_date.isoformat(), max_date.isoformat()),
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return empty
+
+    rostered_sum = 0.0
+    paid_sum = 0.0
+    count = 0
+    for total_time, ts_total in rows:
+        if total_time in (None, "") or ts_total in (None, ""):
+            continue
+        try:
+            rostered = float(total_time)
+            paid = float(ts_total)
+        except (TypeError, ValueError):
+            continue
+        count += 1
+        rostered_sum += rostered
+        paid_sum += paid
+
+    diff = rostered_sum - paid_sum
+    return {
+        "shift_count": count,
+        "rostered_hours": round(rostered_sum, 2),
+        "paid_hours": round(paid_sum, 2),
+        "diff_hours": round(diff, 2),
+        "diff_pct_of_paid": round((diff / paid_sum * 100.0), 1) if paid_sum else 0.0,
+    }
+
+
 def _build_events(invoices):
     """Return (events, invoice_by_id). Also sets default staff fields on invoices."""
     events = []
@@ -139,6 +202,8 @@ def _build_events(invoices):
 
     for invoice in invoices:
         invoice["staff_allocations"] = []
+        invoice["paid_hours_total"] = 0.0
+        invoice["staff_match_sources"] = []
 
         # DIY/Pickup jobs are self-service (customer collects and returns the
         # products), so they never need staff and are excluded from matching.
@@ -171,6 +236,30 @@ def _build_events(invoices):
     return events, invoice_by_id
 
 
+def _roster_allowed_for_event(event, invoice, roster, aliases, employees):
+    """Return (allowed_names_or_None, has_roster_signal).
+
+    ``allowed_names`` is None when the roster has no staff for this job event
+    (caller must not filter). Otherwise it is the set of timesheet names that
+    are permitted to stay attached to the event.
+    """
+    if roster is None or not roster.entry_count:
+        return None, False
+
+    job_text = invoice.get("job_text") or ""
+    nicknames = roster.rostered_staff(job_text, event["kind"], event["anchor"].date())
+    if not nicknames:
+        return None, False
+
+    allowed = build_allowed_names(nicknames, aliases, employees)
+    # Roster signal exists but no nickname resolved yet — still filter using
+    # an empty allow-list would wipe everyone. Prefer keeping time matches
+    # until aliases are configured for at least one nickname.
+    if not allowed:
+        return None, False
+    return allowed, True
+
+
 def allocate_staff(invoices, db_name=DB_NAME):
     """Attach ``staff_allocations`` and ``staff_status`` to each invoice.
 
@@ -179,6 +268,10 @@ def allocate_staff(invoices, db_name=DB_NAME):
         * ``needs_datetime`` - no usable (timed) install/removal datetime
         * ``no_match``       - has timed events but no shift covered them
         * ``matched``        - at least one staff allocation was produced
+
+    Each allocation includes ``match_source``:
+        * ``time``         - time window only (no roster filter applied)
+        * ``time+roster``  - time match kept because the person is on the Excel roster
     """
     events, invoice_by_id = _build_events(invoices)
     if not events:
@@ -189,12 +282,17 @@ def allocate_staff(invoices, db_name=DB_NAME):
         invoice = invoice_by_id[event["invoice_id"]]
         if invoice["staff_status"] == "needs_datetime":
             invoice["staff_status"] = "no_match"
+        invoice["staff_match_sources"] = []
 
     min_date = min(event["anchor"] for event in events).date() - timedelta(days=1)
     max_date = max(event["anchor"] for event in events).date() + timedelta(days=1)
     shifts = _load_shifts(db_name, min_date, max_date)
     if not shifts:
         return invoices
+
+    roster = get_roster()
+    aliases = get_aliases()
+    employees = set(list_timesheet_employees(db_name))
 
     shift_events = defaultdict(list)
 
@@ -216,6 +314,29 @@ def allocate_staff(invoices, db_name=DB_NAME):
         for shift in shifts:
             if shift["shift_start"] <= anchor <= shift["shift_end"]:
                 shift_events[shift["timesheet_id"]].append(event)
+
+    # Roster filter: when the Excel lists staff for a job event, drop time
+    # matches whose team_member is not on that list (after alias resolution).
+    for timesheet_id, responsible in list(shift_events.items()):
+        shift = next((s for s in shifts if s["timesheet_id"] == timesheet_id), None)
+        if not shift:
+            continue
+        kept = []
+        for event in responsible:
+            invoice = invoice_by_id[event["invoice_id"]]
+            allowed, has_signal = _roster_allowed_for_event(
+                event, invoice, roster, aliases, employees
+            )
+            if has_signal and shift["team_member"] not in allowed:
+                continue
+            # Tag the event so apportioning can set match_source on the allocation.
+            event = dict(event)
+            event["roster_filtered"] = bool(has_signal)
+            kept.append(event)
+        if kept:
+            shift_events[timesheet_id] = kept
+        else:
+            del shift_events[timesheet_id]
 
     shift_by_id = {shift["timesheet_id"]: shift for shift in shifts}
 
@@ -260,6 +381,7 @@ def allocate_staff(invoices, db_name=DB_NAME):
             rostered_hours = round(rostered_total * fraction, 2)
             paid_hours = round(paid_total * fraction, 2) if paid_total not in (None, "") else None
 
+            match_source = "time+roster" if event.get("roster_filtered") else "time"
             invoice = invoice_by_id[event["invoice_id"]]
             invoice["staff_allocations"].append(
                 {
@@ -269,8 +391,19 @@ def allocate_staff(invoices, db_name=DB_NAME):
                     "timesheet_span": timesheet_span,
                     "rostered_hours": rostered_hours,
                     "paid_hours": paid_hours,
+                    "match_source": match_source,
                 }
             )
             invoice["staff_status"] = "matched"
+            if match_source not in invoice["staff_match_sources"]:
+                invoice["staff_match_sources"].append(match_source)
+
+    for invoice in invoices:
+        paid_total = 0.0
+        for allocation in invoice.get("staff_allocations") or []:
+            paid_hours = allocation.get("paid_hours")
+            if paid_hours not in (None, ""):
+                paid_total += float(paid_hours)
+        invoice["paid_hours_total"] = round(paid_total, 2)
 
     return invoices

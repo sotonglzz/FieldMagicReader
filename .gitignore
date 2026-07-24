@@ -1,0 +1,8 @@
+.env
+deputy_tokens.json
+jobs_cache.db
+performance.log
+venv/
+__pycache__/
+*.pyc
+.DS_Store

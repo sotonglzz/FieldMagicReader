@@ -69,6 +69,34 @@ ollama serve
 
 If Ollama is not running, the rest of the app works normally; only the AI parse button will report the service as unavailable.
 
+## Optional: Deputy timesheets + roster notes
+
+Job Profitability can show each staff member’s **Deputy roster shift note** (e.g. suburb / job nickname). Notes are not in the JSON export; sync them from the Deputy API.
+
+1. Create an OAuth client at [once.deputy.com](https://once.deputy.com) → **New Oauth Client**. Set the redirect URI to `http://localhost` (must match `.env`).
+2. Copy `.env.example` to `.env` and fill in:
+
+```bash
+DEPUTY_CLIENT_ID=...
+DEPUTY_CLIENT_SECRET=...
+DEPUTY_REDIRECT_URI=http://localhost
+```
+
+3. Authorise once (opens a browser URL; paste the `code` from the redirect):
+
+```bash
+python sync_deputy.py auth
+python sync_deputy.py whoami
+```
+
+4. Sync a date range into SQLite (`roster_comment` is stored per timesheet):
+
+```bash
+python sync_deputy.py sync --from 2025-07-01 --to 2026-06-30
+```
+
+Tokens are saved in `deputy_tokens.json` (gitignored) and refreshed automatically. JSON import still works as a fallback when Deputy is not configured.
+
 ## Project structure
 
 | File | Purpose |
@@ -79,6 +107,9 @@ If Ollama is not running, the rest of the app works normally; only the AI parse 
 | `ollama_client.py` | Optional local-AI datetime parsing fallback |
 | `timesheets.py` | Matches timesheet shifts to jobs and allocates hours |
 | `import_timesheets.py` | Loads `Timesheet details.json` into the database |
+| `deputy.py` | Deputy OAuth client + timesheet/roster sync helpers |
+| `sync_deputy.py` | CLI: `auth` / `whoami` / `sync` |
+| `.env.example` | Deputy credential placeholders |
 | `templates/` | Jinja2 HTML templates |
 | `static/` | CSS and JavaScript assets |
 | `jobs_cache.db` | SQLite cache (auto-generated) |

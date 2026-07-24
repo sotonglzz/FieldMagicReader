@@ -219,6 +219,9 @@
                             {{ invoice.invoice_number }}
                             {% if invoice.staff_allocations %}
                                 <span class="match-source-badges">
+                                    {% if "note" in (invoice.staff_match_sources or []) %}
+                                        <span class="match-source-badge match-source-note" title="Whole shift attributed via Deputy roster shift note">Note</span>
+                                    {% endif %}
                                     {% if "time+roster" in (invoice.staff_match_sources or []) %}
                                         <span class="match-source-badge match-source-roster" title="Time-matched and confirmed against the Excel roster">Time + Roster</span>
                                     {% endif %}
@@ -237,6 +240,13 @@
                         <td class="datetime-cell datetime-install" data-sort-value="{{ invoice.install_datetime or "" }}">
                             {% if invoice.install_ok %}
                                 {{ invoice.install_datetime|datetime_label }}
+                                {% set install_extra = invoice.datetime_events|event_extra_count("install") %}
+                                {% if install_extra %}
+                                    <span
+                                        class="datetime-extra"
+                                        title="{{ invoice.datetime_events|event_extra_title('install', invoice.install_datetime) }}"
+                                    >(+{{ install_extra }} more)</span>
+                                {% endif %}
                             {% else %}
                                 {% if invoice.install_datetime %}<span class="datetime-partial">{{ invoice.install_datetime }}</span>{% endif %}
                                 <button type="button" class="ai-parse-datetime report-view-button" data-invoice-id="{{ invoice.id }}">Parse with AI</button>
@@ -245,6 +255,13 @@
                         <td class="datetime-cell datetime-removal" data-sort-value="{{ invoice.removal_datetime or "" }}">
                             {% if invoice.removal_ok %}
                                 {{ invoice.removal_datetime|datetime_label }}
+                                {% set removal_extra = invoice.datetime_events|event_extra_count("removal") %}
+                                {% if removal_extra %}
+                                    <span
+                                        class="datetime-extra"
+                                        title="{{ invoice.datetime_events|event_extra_title('removal', invoice.removal_datetime) }}"
+                                    >(+{{ removal_extra }} more)</span>
+                                {% endif %}
                             {% else %}
                                 {% if invoice.removal_datetime %}<span class="datetime-partial">{{ invoice.removal_datetime }}</span>{% endif %}
                                 <button type="button" class="ai-parse-datetime report-view-button" data-invoice-id="{{ invoice.id }}">Parse with AI</button>
@@ -260,6 +277,7 @@
                                             <th>Staff</th>
                                             <th>Event</th>
                                             <th>Match</th>
+                                            <th>Shift note</th>
                                             <th>Rostered Times</th>
                                             <th>Timesheet Times</th>
                                             <th>Rostered Hours</th>
@@ -270,14 +288,24 @@
                                         {% for allocation in invoice.staff_allocations %}
                                             <tr>
                                                 <td>{{ allocation.name }}</td>
-                                                <td>{{ allocation.kind|capitalize }}</td>
                                                 <td>
-                                                    {% if allocation.match_source == "time+roster" %}
+                                                    {% if allocation.label %}
+                                                        {{ allocation.kind|capitalize }}
+                                                        <span class="event-label">({{ allocation.label }})</span>
+                                                    {% else %}
+                                                        {{ allocation.kind|capitalize }}
+                                                    {% endif %}
+                                                </td>
+                                                <td>
+                                                    {% if allocation.match_source == "note" %}
+                                                        <span class="match-source-badge match-source-note" title="Whole shift attributed via Deputy roster shift note">Note</span>
+                                                    {% elif allocation.match_source == "time+roster" %}
                                                         <span class="match-source-badge match-source-roster" title="Time-matched and confirmed against the Excel roster">Time + Roster</span>
                                                     {% else %}
                                                         <span class="match-source-badge match-source-time" title="Matched by timesheet time window only">Time</span>
                                                     {% endif %}
                                                 </td>
+                                                <td class="roster-note-cell">{{ allocation.roster_note or "—" }}</td>
                                                 <td>{{ allocation.rostered_span }}</td>
                                                 <td>{{ allocation.timesheet_span or "—" }}</td>
                                                 <td>{{ "%.2f"|format(allocation.rostered_hours) }}</td>
@@ -330,11 +358,20 @@
 
     <script type="application/json" id="calendar-events-data">[
         {%- for invoice in invoices -%}
-            {%- if invoice.install_datetime -%}
-            {"type": "install", "datetime": {{ invoice.install_datetime|tojson }}, "ok": {{ invoice.install_ok|tojson }}, "invoiceNumber": {{ invoice.invoice_number|tojson }}, "customer": {{ invoice.customer_text|tojson }}, "job": {{ invoice.job_text|tojson }}, "amount": {{ (invoice.amount_tax_ex|float)|tojson }}, "url": {{ (url_for('invoice_detail_page', invoice_id=invoice.id) if invoice.id else None)|tojson }}},
-            {%- endif -%}
-            {%- if invoice.removal_datetime -%}
-            {"type": "removal", "datetime": {{ invoice.removal_datetime|tojson }}, "ok": {{ invoice.removal_ok|tojson }}, "invoiceNumber": {{ invoice.invoice_number|tojson }}, "customer": {{ invoice.customer_text|tojson }}, "job": {{ invoice.job_text|tojson }}, "amount": {{ (invoice.amount_tax_ex|float)|tojson }}, "url": {{ (url_for('invoice_detail_page', invoice_id=invoice.id) if invoice.id else None)|tojson }}},
+            {%- set cal_events = invoice.datetime_events if invoice.datetime_events else [] -%}
+            {%- if cal_events -%}
+                {%- for event in cal_events -%}
+                    {%- if event.datetime -%}
+            {"type": {{ event.type|tojson }}, "datetime": {{ event.datetime|tojson }}, "ok": {{ event.ok|tojson }}, "label": {{ (event.label or "")|tojson }}, "invoiceNumber": {{ invoice.invoice_number|tojson }}, "customer": {{ invoice.customer_text|tojson }}, "job": {{ invoice.job_text|tojson }}, "amount": {{ (invoice.amount_tax_ex|float)|tojson }}, "url": {{ (url_for('invoice_detail_page', invoice_id=invoice.id) if invoice.id else None)|tojson }}},
+                    {%- endif -%}
+                {%- endfor -%}
+            {%- else -%}
+                {%- if invoice.install_datetime -%}
+            {"type": "install", "datetime": {{ invoice.install_datetime|tojson }}, "ok": {{ invoice.install_ok|tojson }}, "label": "", "invoiceNumber": {{ invoice.invoice_number|tojson }}, "customer": {{ invoice.customer_text|tojson }}, "job": {{ invoice.job_text|tojson }}, "amount": {{ (invoice.amount_tax_ex|float)|tojson }}, "url": {{ (url_for('invoice_detail_page', invoice_id=invoice.id) if invoice.id else None)|tojson }}},
+                {%- endif -%}
+                {%- if invoice.removal_datetime -%}
+            {"type": "removal", "datetime": {{ invoice.removal_datetime|tojson }}, "ok": {{ invoice.removal_ok|tojson }}, "label": "", "invoiceNumber": {{ invoice.invoice_number|tojson }}, "customer": {{ invoice.customer_text|tojson }}, "job": {{ invoice.job_text|tojson }}, "amount": {{ (invoice.amount_tax_ex|float)|tojson }}, "url": {{ (url_for('invoice_detail_page', invoice_id=invoice.id) if invoice.id else None)|tojson }}},
+                {%- endif -%}
             {%- endif -%}
         {%- endfor -%}
         {"type": "sentinel"}

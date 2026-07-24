@@ -1,7 +1,8 @@
 """Timesheet matching engine: attribute staff shift hours to jobs.
 
 The timesheet export has no job key, so a shift is matched to a job event
-(install/removal) purely by time:
+(install/removal) purely by time. Multi-day jobs may expose several install
+and/or removal anchors; each timed event is matched independently.
 
 * Dedicated match: the shift starts near the job's anchor time, allowing for a
   travel lead (~1h) plus tolerance (+/-2h).
@@ -111,23 +112,39 @@ def _load_shifts(db_name, min_date, max_date):
                 f"""
                 SELECT timesheet_id, team_member, shift_start, shift_end,
                        timesheet_start, timesheet_end,
-                       total_time, timesheet_total_time
+                       total_time, timesheet_total_time, roster_comment
                 FROM timesheets
                 WHERE {_SHIFT_FILTER_SQL}
                 """,
                 (min_date.isoformat(), max_date.isoformat()),
             )
             rows = cursor.fetchall()
-        except sqlite3.OperationalError:
-            # timesheets table not created yet.
-            return shifts
+        except sqlite3.OperationalError as exc:
+            # Older DBs may lack roster_comment; retry without it.
+            if "roster_comment" in str(exc):
+                cursor.execute(
+                    f"""
+                    SELECT timesheet_id, team_member, shift_start, shift_end,
+                           timesheet_start, timesheet_end,
+                           total_time, timesheet_total_time
+                    FROM timesheets
+                    WHERE {_SHIFT_FILTER_SQL}
+                    """,
+                    (min_date.isoformat(), max_date.isoformat()),
+                )
+                rows = [(*row, None) for row in cursor.fetchall()]
+            else:
+                # timesheets table not created yet.
+                return shifts
 
     for (timesheet_id, team_member, shift_start, shift_end,
-         timesheet_start, timesheet_end, total_time, timesheet_total_time) in rows:
+         timesheet_start, timesheet_end, total_time, timesheet_total_time,
+         roster_comment) in rows:
         start = _parse_dt(shift_start)
         end = _parse_dt(shift_end)
         if not start or not end or end <= start:
             continue
+        note = (roster_comment or "").strip() or None
         shifts.append(
             {
                 "timesheet_id": timesheet_id,
@@ -139,6 +156,7 @@ def _load_shifts(db_name, min_date, max_date):
                 # Paid totals (breaks removed): rostered vs actually worked.
                 "total_time": total_time,
                 "timesheet_total_time": timesheet_total_time,
+                "roster_comment": note,
             }
         )
     return shifts
@@ -195,6 +213,35 @@ def summarise_rostered_vs_paid(min_date, max_date, db_name=DB_NAME):
     }
 
 
+def _iter_invoice_event_anchors(invoice):
+    """Yield ``(kind, anchor_dt, label)`` for every usable timed schedule event."""
+    events = invoice.get("datetime_events") or []
+    emitted = False
+    for event in events:
+        kind = event.get("type")
+        value = event.get("datetime")
+        if kind not in ("install", "removal"):
+            continue
+        if not event.get("ok") or not value or not _has_time(value):
+            continue
+        anchor = _parse_dt(value)
+        if not anchor:
+            continue
+        emitted = True
+        yield kind, anchor, event.get("label") or ""
+
+    if emitted:
+        return
+
+    # Fallback for invoices that only have the legacy single-pair fields.
+    for kind, value_key, ok_key in _EVENT_FIELDS:
+        value = invoice.get(value_key)
+        if invoice.get(ok_key) and value and _has_time(value):
+            anchor = _parse_dt(value)
+            if anchor:
+                yield kind, anchor, ""
+
+
 def _build_events(invoices):
     """Return (events, invoice_by_id). Also sets default staff fields on invoices."""
     events = []
@@ -219,19 +266,16 @@ def _build_events(invoices):
             continue
         invoice_by_id[invoice_id] = invoice
 
-        for kind, value_key, ok_key in _EVENT_FIELDS:
-            value = invoice.get(value_key)
-            if invoice.get(ok_key) and value and _has_time(value):
-                anchor = _parse_dt(value)
-                if anchor:
-                    events.append(
-                        {
-                            "invoice_id": invoice_id,
-                            "kind": kind,
-                            "anchor": anchor,
-                            "has_dedicated": False,
-                        }
-                    )
+        for kind, anchor, label in _iter_invoice_event_anchors(invoice):
+            events.append(
+                {
+                    "invoice_id": invoice_id,
+                    "kind": kind,
+                    "anchor": anchor,
+                    "label": label,
+                    "has_dedicated": False,
+                }
+            )
 
     return events, invoice_by_id
 
@@ -343,10 +387,12 @@ def allocate_staff(invoices, db_name=DB_NAME):
     for timesheet_id, responsible in shift_events.items():
         shift = shift_by_id[timesheet_id]
 
-        # De-duplicate by (invoice, kind), keeping earliest anchor, then sort.
+        # De-duplicate exact anchors, keeping earliest label, then sort.
+        # Same kind on different days must stay distinct so multi-day jobs
+        # can match a shift to each day's install/removal.
         unique = {}
         for event in responsible:
-            key = (event["invoice_id"], event["kind"])
+            key = (event["invoice_id"], event["kind"], event["anchor"])
             if key not in unique or event["anchor"] < unique[key]["anchor"]:
                 unique[key] = event
         ordered = sorted(unique.values(), key=lambda event: event["anchor"])
@@ -387,11 +433,13 @@ def allocate_staff(invoices, db_name=DB_NAME):
                 {
                     "name": shift["team_member"],
                     "kind": event["kind"],
+                    "label": event.get("label") or "",
                     "rostered_span": _format_span(shift["shift_start"], shift["shift_end"]),
                     "timesheet_span": timesheet_span,
                     "rostered_hours": rostered_hours,
                     "paid_hours": paid_hours,
                     "match_source": match_source,
+                    "roster_note": shift.get("roster_comment") or "",
                 }
             )
             invoice["staff_status"] = "matched"

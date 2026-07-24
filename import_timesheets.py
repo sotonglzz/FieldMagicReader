@@ -34,7 +34,10 @@ def create_timesheets_table(conn):
             area TEXT,
             location TEXT,
             leave_policy TEXT,
-            status TEXT
+            status TEXT,
+            roster_id TEXT,
+            roster_comment TEXT,
+            deputy_employee_id TEXT
         )
         """
     )
@@ -44,7 +47,15 @@ def create_timesheets_table(conn):
     # Migrate pre-existing tables that lack the newer columns.
     cursor.execute("PRAGMA table_info(timesheets)")
     existing = {row[1] for row in cursor.fetchall()}
-    for column in ("leave_policy", "status", "timesheet_start", "timesheet_end"):
+    for column in (
+        "leave_policy",
+        "status",
+        "timesheet_start",
+        "timesheet_end",
+        "roster_id",
+        "roster_comment",
+        "deputy_employee_id",
+    ):
         if column not in existing:
             cursor.execute(f"ALTER TABLE timesheets ADD COLUMN {column} TEXT")
     if "timesheet_total_time" not in existing:

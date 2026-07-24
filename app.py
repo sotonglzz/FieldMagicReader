@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from flask import Flask, render_template, request, redirect, url_for, jsonify
 from update_job_types import update_job_types, update_job_addresses, update_pickup_dates, PARSE_ERRORS
-from datetime_parser import parse_install_removal
+from datetime_parser import events_from_install_removal, parse_install_removal
 from ollama_client import parse_datetimes_with_ollama
 from timesheets import allocate_staff, summarise_rostered_vs_paid
 from import_timesheets import import_timesheets_if_present
@@ -60,9 +60,37 @@ def format_datetime_label(value):
     time_label = parsed.strftime("%I:%M%p").lstrip("0").lower()
     return f"{parsed.strftime('%a %d %b %Y')}, {time_label}"
 
+def count_events_of_type(events, event_type):
+    return sum(1 for event in (events or []) if event.get("type") == event_type)
+
+def extra_events_title(events, event_type, primary_datetime):
+    """Tooltip listing the non-primary events of a type."""
+    others = [
+        event
+        for event in (events or [])
+        if event.get("type") == event_type and event.get("datetime") != primary_datetime
+    ]
+    if not others:
+        return ""
+    parts = []
+    for event in others:
+        label = (event.get("label") or event_type).strip()
+        when = format_datetime_label(event.get("datetime")) or event.get("datetime") or ""
+        parts.append(f"{label}: {when}" if when else label)
+    return " | ".join(parts)
+
 @app.template_filter("datetime_label")
 def datetime_label_filter(value):
     return format_datetime_label(value)
+
+@app.template_filter("event_extra_count")
+def event_extra_count_filter(events, event_type):
+    total = count_events_of_type(events, event_type)
+    return max(total - 1, 0)
+
+@app.template_filter("event_extra_title")
+def event_extra_title_filter(events, event_type, primary_datetime):
+    return extra_events_title(events, event_type, primary_datetime)
 
 # Database Initialization
 DB_NAME = "jobs_cache.db"
@@ -121,7 +149,8 @@ def init_db():
             install_datetime TEXT,
             removal_datetime TEXT,
             source TEXT,
-            fetched_at TIMESTAMP
+            fetched_at TIMESTAMP,
+            events TEXT
         )
         """)
         cursor.execute("PRAGMA table_info(jobs)")
@@ -129,6 +158,11 @@ def init_db():
         if "id" not in columns:
             cursor.execute("ALTER TABLE jobs ADD COLUMN id TEXT")
             logging.info("Added missing 'id' column to jobs table.")
+        cursor.execute("PRAGMA table_info(invoice_datetime_cache)")
+        datetime_columns = {column[1] for column in cursor.fetchall()}
+        if "events" not in datetime_columns:
+            cursor.execute("ALTER TABLE invoice_datetime_cache ADD COLUMN events TEXT")
+            logging.info("Added missing 'events' column to invoice_datetime_cache table.")
         conn.commit()
 
 # Encrypting FieldMagic Username & Password (API Key and Secret)
@@ -279,30 +313,74 @@ def get_all_invoice_datetime_cache():
         cursor = conn.cursor()
         try:
             cursor.execute(
-                "SELECT invoice_id, install_datetime, removal_datetime, source FROM invoice_datetime_cache"
+                "SELECT invoice_id, install_datetime, removal_datetime, source, events "
+                "FROM invoice_datetime_cache"
             )
             rows = cursor.fetchall()
         except sqlite3.OperationalError:
-            return {}
+            try:
+                cursor.execute(
+                    "SELECT invoice_id, install_datetime, removal_datetime, source "
+                    "FROM invoice_datetime_cache"
+                )
+                rows = [(row[0], row[1], row[2], row[3], None) for row in cursor.fetchall()]
+            except sqlite3.OperationalError:
+                return {}
 
-    return {
-        row[0]: {
+    cache = {}
+    for row in rows:
+        events = []
+        if row[4]:
+            try:
+                events = json.loads(row[4]) or []
+            except (TypeError, json.JSONDecodeError):
+                events = []
+        if not events:
+            events = events_from_install_removal(row[1], row[2])
+        cache[row[0]] = {
             "install_datetime": row[1],
             "removal_datetime": row[2],
             "source": row[3],
+            "events": events,
         }
-        for row in rows
-    }
+    return cache
 
-def cache_invoice_datetimes(invoice_id, install_datetime, removal_datetime, source, fetched_at):
+def cache_invoice_datetimes(
+    invoice_id,
+    install_datetime,
+    removal_datetime,
+    source,
+    fetched_at,
+    events=None,
+):
+    if events is None:
+        events = events_from_install_removal(install_datetime, removal_datetime)
     with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.cursor()
         cursor.execute("""
             INSERT OR REPLACE INTO invoice_datetime_cache (
-                invoice_id, install_datetime, removal_datetime, source, fetched_at
-            ) VALUES (?, ?, ?, ?, ?)
-        """, (invoice_id, install_datetime, removal_datetime, source, fetched_at.isoformat()))
+                invoice_id, install_datetime, removal_datetime, source, fetched_at, events
+            ) VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            invoice_id,
+            install_datetime,
+            removal_datetime,
+            source,
+            fetched_at.isoformat(),
+            json.dumps(events),
+        ))
         conn.commit()
+
+def apply_parsed_datetimes(invoice, parsed):
+    """Attach primary datetimes and the full events list to an invoice dict."""
+    events = parsed.get("events") or []
+    invoice["install_datetime"] = parsed.get("install")
+    invoice["removal_datetime"] = parsed.get("removal")
+    invoice["install_ok"] = bool(parsed.get("install_ok"))
+    invoice["removal_ok"] = bool(parsed.get("removal_ok"))
+    invoice["datetime_events"] = events
+    invoice["install_event_count"] = count_events_of_type(events, "install")
+    invoice["removal_event_count"] = count_events_of_type(events, "removal")
 
 def resolve_invoice_datetimes(invoices):
     """Attach install/removal datetimes to each invoice.
@@ -316,21 +394,27 @@ def resolve_invoice_datetimes(invoices):
         cached = cache.get(invoice_id) if invoice_id else None
 
         if cached and cached.get("source") in ("ollama", "manual"):
-            invoice["install_datetime"] = cached.get("install_datetime")
-            invoice["removal_datetime"] = cached.get("removal_datetime")
-            invoice["install_ok"] = bool(cached.get("install_datetime"))
-            invoice["removal_ok"] = bool(cached.get("removal_datetime"))
+            events = cached.get("events") or events_from_install_removal(
+                cached.get("install_datetime"),
+                cached.get("removal_datetime"),
+            )
+            apply_parsed_datetimes(
+                invoice,
+                {
+                    "install": cached.get("install_datetime"),
+                    "removal": cached.get("removal_datetime"),
+                    "install_ok": bool(cached.get("install_datetime")),
+                    "removal_ok": bool(cached.get("removal_datetime")),
+                    "events": events,
+                },
+            )
             continue
 
         parsed = parse_install_removal(
             invoice.get("invoice_summary"),
             invoice.get("job_summary")
         )
-        invoice["install_datetime"] = parsed["install"]
-        invoice["removal_datetime"] = parsed["removal"]
-        invoice["install_ok"] = parsed["install_ok"]
-        invoice["removal_ok"] = parsed["removal_ok"]
-
+        apply_parsed_datetimes(invoice, parsed)
 def fetch_invoice_detail(invoice_id):
     response = requests.get(
         f"{CUSTOMER_INVOICES_API_URL}/{invoice_id}",
@@ -863,15 +947,27 @@ def parse_invoice_datetimes(invoice_id):
 
     install_datetime = parsed.get("install_datetime")
     removal_datetime = parsed.get("removal_datetime")
+    events = events_from_install_removal(install_datetime, removal_datetime)
     cache_invoice_datetimes(
-        invoice_id, install_datetime, removal_datetime, "ollama", datetime.now()
+        invoice_id,
+        install_datetime,
+        removal_datetime,
+        "ollama",
+        datetime.now(),
+        events=events,
     )
 
     invoice = dict(detail)
-    invoice["install_datetime"] = install_datetime
-    invoice["removal_datetime"] = removal_datetime
-    invoice["install_ok"] = bool(install_datetime)
-    invoice["removal_ok"] = bool(removal_datetime)
+    apply_parsed_datetimes(
+        invoice,
+        {
+            "install": install_datetime,
+            "removal": removal_datetime,
+            "install_ok": bool(install_datetime),
+            "removal_ok": bool(removal_datetime),
+            "events": events,
+        },
+    )
 
     try:
         allocate_staff([invoice])
@@ -883,6 +979,9 @@ def parse_invoice_datetimes(invoice_id):
         "removal_datetime": removal_datetime,
         "install_ok": bool(install_datetime),
         "removal_ok": bool(removal_datetime),
+        "datetime_events": events,
+        "install_event_count": invoice.get("install_event_count", 0),
+        "removal_event_count": invoice.get("removal_event_count", 0),
         "install_label": format_datetime_label(install_datetime),
         "removal_label": format_datetime_label(removal_datetime),
         "staff_allocations": invoice.get("staff_allocations", []),
@@ -903,8 +1002,23 @@ def fy26_report():
 if __name__ == "__main__":
     init_db()
     logging.info("Database initialized.")
-    imported = import_timesheets_if_present()
-    logging.info(f"Timesheet import complete ({imported} rows).")
+    # Prefer Deputy-synced timesheets when tokens exist so a local JSON
+    # re-import does not wipe roster_comment on every server start.
+    from pathlib import Path
+
+    if Path("deputy_tokens.json").exists():
+        from import_timesheets import create_timesheets_table
+        import sqlite3
+
+        with sqlite3.connect("jobs_cache.db") as conn:
+            create_timesheets_table(conn)
+        logging.info(
+            "Deputy tokens found; skipping JSON timesheet import. "
+            "Run `python sync_deputy.py sync --from … --to …` to refresh."
+        )
+    else:
+        imported = import_timesheets_if_present()
+        logging.info(f"Timesheet import complete ({imported} rows).")
     # Warm the roster cache in a background thread so the server starts quickly
     # (parsing the full Schedule workbook takes ~1 minute).
     def _warm_roster():

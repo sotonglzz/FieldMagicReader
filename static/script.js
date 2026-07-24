@@ -1736,7 +1736,7 @@ function staffStatusMessage(status) {
     return "No staff allocated.";
 }
 
-function setDatetimeCell(cell, value, ok, invoiceId) {
+function setDatetimeCell(cell, value, ok, invoiceId, events = [], eventType = null) {
     if (!cell) {
         return;
     }
@@ -1745,7 +1745,25 @@ function setDatetimeCell(cell, value, ok, invoiceId) {
     cell.innerHTML = "";
 
     if (value && ok) {
-        cell.textContent = formatDatetimeLabel(value);
+        cell.appendChild(document.createTextNode(formatDatetimeLabel(value)));
+        const typed = (events || []).filter((event) => event.type === eventType);
+        const extra = Math.max(typed.length - 1, 0);
+        if (extra > 0) {
+            const badge = document.createElement("span");
+            badge.className = "datetime-extra";
+            badge.textContent = `(+${extra} more)`;
+            badge.title = typed
+                .filter((event) => event.datetime !== value)
+                .map((event) => {
+                    const label = (event.label || eventType || "").trim();
+                    const when = formatDatetimeLabel(event.datetime) || event.datetime || "";
+                    return label ? `${label}: ${when}` : when;
+                })
+                .filter(Boolean)
+                .join(" | ");
+            cell.appendChild(document.createTextNode(" "));
+            cell.appendChild(badge);
+        }
         return;
     }
 
@@ -1765,6 +1783,9 @@ function setDatetimeCell(cell, value, ok, invoiceId) {
 }
 
 function matchSourceBadgeHtml(matchSource) {
+    if (matchSource === "note") {
+        return `<span class="match-source-badge match-source-note" title="Whole shift attributed via Deputy roster shift note">Note</span>`;
+    }
     if (matchSource === "time+roster") {
         return `<span class="match-source-badge match-source-roster" title="Time-matched and confirmed against the Excel roster">Time + Roster</span>`;
     }
@@ -1774,6 +1795,9 @@ function matchSourceBadgeHtml(matchSource) {
 function invoiceMatchBadgesHtml(allocations) {
     const sources = new Set((allocations || []).map((a) => a.match_source || "time"));
     const parts = [];
+    if (sources.has("note")) {
+        parts.push(matchSourceBadgeHtml("note"));
+    }
     if (sources.has("time+roster")) {
         parts.push(matchSourceBadgeHtml("time+roster"));
     }
@@ -1795,17 +1819,24 @@ function renderStaffRow(staffRow, data) {
         return;
     }
 
-    const rows = allocations.map((allocation) => `
+    const rows = allocations.map((allocation) => {
+        const kindLabel = capitalizeWord(allocation.kind);
+        const eventLabel = allocation.label
+            ? `${kindLabel} <span class="event-label">(${escapeReportHtml(allocation.label)})</span>`
+            : escapeReportHtml(kindLabel);
+        return `
         <tr>
             <td>${escapeReportHtml(allocation.name)}</td>
-            <td>${escapeReportHtml(capitalizeWord(allocation.kind))}</td>
+            <td>${eventLabel}</td>
             <td>${matchSourceBadgeHtml(allocation.match_source)}</td>
+            <td class="roster-note-cell">${escapeReportHtml(allocation.roster_note) || "—"}</td>
             <td>${escapeReportHtml(allocation.rostered_span)}</td>
             <td>${escapeReportHtml(allocation.timesheet_span) || "—"}</td>
             <td>${Number(allocation.rostered_hours || 0).toFixed(2)}</td>
             <td>${allocation.paid_hours != null ? Number(allocation.paid_hours).toFixed(2) : "—"}</td>
         </tr>
-    `).join("");
+    `;
+    }).join("");
 
     cell.innerHTML = `
         <table class="invoice-line-items-table staff-allocations-table">
@@ -1814,6 +1845,7 @@ function renderStaffRow(staffRow, data) {
                     <th>Staff</th>
                     <th>Event</th>
                     <th>Match</th>
+                    <th>Shift note</th>
                     <th>Rostered Times</th>
                     <th>Timesheet Times</th>
                     <th>Rostered Hours</th>
@@ -1914,8 +1946,23 @@ function applyDatetimeResult(container, invoiceId, data) {
     const staffRow = container.querySelector(`tr.profitability-staff-row${selector}`);
 
     if (invoiceRow) {
-        setDatetimeCell(invoiceRow.querySelector(".datetime-install"), data.install_datetime, data.install_ok, invoiceId);
-        setDatetimeCell(invoiceRow.querySelector(".datetime-removal"), data.removal_datetime, data.removal_ok, invoiceId);
+        const events = data.datetime_events || [];
+        setDatetimeCell(
+            invoiceRow.querySelector(".datetime-install"),
+            data.install_datetime,
+            data.install_ok,
+            invoiceId,
+            events,
+            "install"
+        );
+        setDatetimeCell(
+            invoiceRow.querySelector(".datetime-removal"),
+            data.removal_datetime,
+            data.removal_ok,
+            invoiceId,
+            events,
+            "removal"
+        );
         const numberCell = invoiceRow.querySelector("td");
         if (numberCell) {
             const existing = numberCell.querySelector(".match-source-badges");
@@ -2173,7 +2220,7 @@ function setupCalendarView() {
 
             return `
                 <tr>
-                    <td>${escapeReportHtml(formatTime(event.date))}${estimated}</td>
+                    <td>${escapeReportHtml(formatTime(event.date))}${estimated}${event.label ? ` <span class="event-label">(${escapeReportHtml(event.label)})</span>` : ""}</td>
                     <td>${escapeReportHtml(event.invoiceNumber || "")}</td>
                     <td>${escapeReportHtml(event.customer || "")}</td>
                     <td>${escapeReportHtml(event.job || "")}</td>
